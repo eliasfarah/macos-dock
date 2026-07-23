@@ -84,5 +84,55 @@
       <description>Lista, codificada em JSON, dos stacks configurados (id, nome, caminho da pasta, ícone e modo de exibição).</description>
     </key>
 
+    <key name="dock-icon-size" type="i">
+      <range min="36" max="96"/>
+      <default>64</default>
+      <summary>Tamanho dos ícones da dock</summary>
+      <description>Tamanho, em pixels, dos ícones na barra da dock.</description>
+    </key>
+
+    <key name="dock-edge-margin" type="i">
+      <range min="0" max="40"/>
+      <default>6</default>
+      <summary>Margem da borda da tela</summary>
+      <description>Distância, em pixels, entre a dock e a borda inferior da tela.</description>
+    </key>
+
+    <key name="dock-autohide" type="b">
+      <default>false</default>
+      <summary>Ocultar automaticamente</summary>
+      <description>Quando ativado, a dock não reserva espaço de tela e se revela ao aproximar o cursor da borda inferior.</description>
+    </key>
+
+    <key name="dock-magnification-enabled" type="b">
+      <default>true</default>
+      <summary>Magnificação ativada</summary>
+      <description>Amplia os ícones da dock conforme o cursor se aproxima, como no macOS.</description>
+    </key>
+
+    <key name="dock-magnification-amount" type="d">
+      <range min="1.0" max="2.5"/>
+      <default>1.4</default>
+      <summary>Intensidade da magnificação</summary>
+      <description>Fator de escala máximo aplicado ao ícone mais próximo do cursor.</description>
+    </key>
+
+    <key name="dock-magnification-range" type="i">
+      <range min="40" max="400"/>
+      <default>140</default>
+      <summary>Alcance da magnificação</summary>
+      <description>Raio, em pixels, de influência do cursor sobre o tamanho dos ícones vizinhos.</description>
+    </key>
+
+    <key name="dock-minimize-effect" type="s">
+      <choices>
+        <choice value="genie"/>
+        <choice value="default"/>
+      </choices>
+      <default>"genie"</default>
+      <summary>Efeito ao minimizar</summary>
+      <description>Animação usada ao minimizar janelas: "genie" (estilo macOS) ou "default" (padrão do GNOME Shell).</description>
+    </key>
+
   </schema>
 </schemalist>

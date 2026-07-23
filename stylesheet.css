@@ -86,3 +86,27 @@
 .macos-stack-dash-icon-image {
   padding: 4px;
 }
+
+.macos-dock-icon-box {
+  spacing: 10px;
+  padding: 0 10px;
+}
+
+.macos-dock-icon-box StBoxLayout {
+  spacing: 6px;
+}
+
+.macos-dock-separator {
+  background-color: rgba(255, 255, 255, 0.14);
+  margin: 8px 0;
+}
+
+.macos-dock-trash-icon,
+.macos-dock-folder-icon {
+  border-radius: 10px;
+}
+
+.macos-dock-trash-icon:hover,
+.macos-dock-folder-icon:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}

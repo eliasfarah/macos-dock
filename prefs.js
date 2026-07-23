@@ -17,9 +17,18 @@ import { StackSettings } from './modules/settings.js';
 import { generateStackId } from './modules/utils.js';
 
 const DIRECTION_VALUES = ['auto', 'up', 'down'];
-const DIRECTION_LABELS = [_('Automático'), _('Para cima'), _('Para baixo')];
 const MODE_VALUES = ['grid', 'fan', 'stack'];
-const MODE_LABELS = [_('Grade'), _('Leque'), _('Pilha')];
+
+// gettext can only be called once the extension is actually running (it
+// resolves the caller against the loaded-extensions registry), so these
+// labels must be built lazily inside a method, not at module-evaluation time.
+function directionLabels() {
+    return [_('Automático'), _('Para cima'), _('Para baixo')];
+}
+
+function modeLabels() {
+    return [_('Grade'), _('Leque'), _('Pilha')];
+}
 
 export default class MacosDockStackPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -73,13 +82,13 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
 
         const layoutGroup = new Adw.PreferencesGroup({ title: _('Layout') });
         page.add(layoutGroup);
-        layoutGroup.add(this._comboRow(gsettings, 'display-mode', MODE_VALUES, MODE_LABELS, {
+        layoutGroup.add(this._comboRow(gsettings, 'display-mode', MODE_VALUES, modeLabels(), {
             title: _('Modo de exibição'),
         }));
         layoutGroup.add(this._spinRow(gsettings, 'grid-columns', {
             title: _('Colunas da grade'), lower: 2, upper: 8, step: 1, digits: 0,
         }));
-        layoutGroup.add(this._comboRow(gsettings, 'open-direction', DIRECTION_VALUES, DIRECTION_LABELS, {
+        layoutGroup.add(this._comboRow(gsettings, 'open-direction', DIRECTION_VALUES, directionLabels(), {
             title: _('Direção de abertura'),
         }));
 
@@ -237,7 +246,8 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
                 });
                 onDone();
             } catch (error) {
-                // User cancelled the dialog — nothing to do.
+                if (!error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    console.error('macos-dock-stack: failed to add folder', error);
             }
         });
     }

@@ -25,6 +25,14 @@ export class StackSettings {
     get overshootEnabled() { return this._gsettings.get_boolean('overshoot-enabled'); }
     get staggerDelay() { return this._gsettings.get_int('stagger-delay'); }
 
+    get dockIconSize() { return this._gsettings.get_int('dock-icon-size'); }
+    get dockEdgeMargin() { return this._gsettings.get_int('dock-edge-margin'); }
+    get dockAutohide() { return this._gsettings.get_boolean('dock-autohide'); }
+    get dockMagnificationEnabled() { return this._gsettings.get_boolean('dock-magnification-enabled'); }
+    get dockMagnificationAmount() { return this._gsettings.get_double('dock-magnification-amount'); }
+    get dockMagnificationRange() { return this._gsettings.get_int('dock-magnification-range'); }
+    get dockMinimizeEffect() { return this._gsettings.get_string('dock-minimize-effect'); }
+
     getStacks() {
         const raw = this._gsettings.get_string(STACKS_KEY);
         try {

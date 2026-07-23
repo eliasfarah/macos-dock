@@ -31,6 +31,9 @@ export const SPRING = {
     // Used when "overshoot" is disabled in preferences, and for
     // secondary layers (shadow, blur) that should not bounce.
     SOFT: { mass: 1, stiffness: 170, damping: 26 },
+    // Fast, essentially non-bouncy — dock icon hover magnification needs
+    // to track the pointer crisply, not oscillate like the panel open/close.
+    MAGNIFY: { mass: 1, stiffness: 320, damping: 30 },
 };
 
 /**
