@@ -39,6 +39,7 @@ export class Stack {
         this._shadow = null;
         this._blurEffect = null;
         this._glare = null;
+        this._scrollView = null;
         this._gridWidget = null;
         this._items = [];
         this._entries = [];
@@ -187,13 +188,20 @@ export class Stack {
         const width = clamp(this._settings.panelSize, 240, workArea.width - PANEL_MARGIN * 2);
 
         let height;
+        let contentHeight;
         if (mode === 'grid') {
             const rows = Math.max(1, Math.ceil(this._entries.length / columns));
-            height = clamp(rows * ITEM_HEIGHT + PANEL_MARGIN * 2, 160, workArea.height - PANEL_MARGIN * 2);
+            // The panel/viewport height is clamped to fit the screen, but
+            // the grid's own content can be taller — it scrolls instead of
+            // silently clipping files past the visible rows.
+            contentHeight = rows * ITEM_HEIGHT + PANEL_MARGIN * 2;
+            height = clamp(contentHeight, 160, workArea.height - PANEL_MARGIN * 2);
         } else {
             // Fan / stack modes want open space to spread items in, so
-            // they use a squarer area rather than growing with rows.
+            // they use a squarer area rather than growing with rows, and
+            // don't scroll — items are deliberately laid out to fit.
             height = clamp(width * 0.72, 200, workArea.height - PANEL_MARGIN * 2);
+            contentHeight = height;
         }
 
         let x = clamp(origin.x - width / 2, workArea.x + PANEL_MARGIN, workArea.x + workArea.width - width - PANEL_MARGIN);
@@ -211,7 +219,7 @@ export class Stack {
         else
             y = Math.min(workArea.y + workArea.height - height - PANEL_MARGIN, origin.iconBottom + ICON_GAP);
 
-        this._geometry = { x, y, width, height, direction, columns };
+        this._geometry = { x, y, width, height, direction, columns, contentHeight };
         return this._geometry;
     }
 
@@ -220,7 +228,11 @@ export class Stack {
         this._panel.set_size(geometry.width, geometry.height);
         this._shadow.set_position(geometry.x, geometry.y);
         this._shadow.set_size(geometry.width, geometry.height);
-        this._gridWidget.set_size(geometry.width, geometry.height);
+        // The scroll view is the visible viewport (clamped to the panel);
+        // the grid widget inside it is sized to the full, possibly-taller
+        // content so overflow scrolls instead of being clipped and lost.
+        this._scrollView.set_size(geometry.width, geometry.height);
+        this._gridWidget.set_size(geometry.width, geometry.contentHeight);
     }
 
     _setPivotFromOrigin(origin, geometry) {
@@ -247,9 +259,24 @@ export class Stack {
 
         this._gridWidget = new St.Widget({
             style_class: 'macos-stack-grid',
-            layout_manager: new Clutter.BinLayout(),
+            // FixedLayout, not BinLayout: _layoutGrid/_layoutFan/_layoutStack
+            // position each item with set_position(), which BinLayout would
+            // ignore (it aligns children via x-align/y-align instead of
+            // honoring a fixed position) — every item would collapse onto
+            // the same spot. FixedLayout is the one that actually respects
+            // manually-set child positions.
+            layout_manager: new Clutter.FixedLayout(),
         });
-        content.add_child(this._gridWidget);
+
+        this._scrollView = new St.ScrollView({
+            style_class: 'macos-stack-scroll',
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            overlay_scrollbars: true, // thin, auto-hiding — not a GTK trough
+            x_expand: true, y_expand: true,
+        });
+        this._scrollView.set_child(this._gridWidget);
+        content.add_child(this._scrollView);
 
         this._panel.set({ scale_x: 0.05, scale_y: 0.05, opacity: 0 });
 
@@ -591,6 +618,7 @@ export class Stack {
         this._shadow = null;
         this._blurEffect = null;
         this._glare = null;
+        this._scrollView = null;
         this._gridWidget = null;
         this._items = [];
         this._entries = [];

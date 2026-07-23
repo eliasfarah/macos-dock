@@ -60,8 +60,13 @@
   padding: 6px;
 }
 
-.macos-stack-item-icon {
-  -st-icon-style: symbolic;
+.macos-stack-scroll {
+  background-color: transparent;
+  border: none;
+}
+
+.macos-stack-scroll StScrollBar {
+  padding: 0 2px;
 }
 
 .macos-stack-item-label {

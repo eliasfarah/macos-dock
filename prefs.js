@@ -142,13 +142,15 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
         });
         group.set_header_suffix(addButton);
 
+        // Every mutation below (add, remove, rename) already refreshes
+        // the list itself right after writing to GSettings. There's
+        // deliberately no separate `settings.connectChanged` listener
+        // here: the rename EntryRow's own 'changed' handler writes on
+        // every keystroke, and a reactive rebuild on that write would
+        // destroy the row being typed into — yanking focus out from
+        // under the user after each character.
         const refresh = () => this._refreshStacksList(group, settings);
-
         addButton.connect('clicked', () => this._pickFolder(window, settings, refresh));
-        settings.connectChanged((_s, key) => {
-            if (key === 'stacks')
-                refresh();
-        });
 
         refresh();
         return page;
@@ -205,10 +207,13 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
                 const file = dialog.select_folder_finish(result);
                 if (!file)
                     return;
+                const path = file.get_path();
+                if (settings.getStacks().some(s => s.path === path))
+                    return; // already configured — avoid a duplicate dock icon
                 settings.addStack({
                     id: generateStackId(),
                     name: file.get_basename(),
-                    path: file.get_path(),
+                    path,
                     icon: null,
                 });
                 onDone();

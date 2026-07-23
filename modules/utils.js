@@ -53,6 +53,21 @@ const ENUMERATE_ATTRIBUTES = [
     'thumbnail::is-valid',
 ].join(',');
 
+const ENUMERATE_BATCH_SIZE = 50;
+
+function toEntry(enumerator, info) {
+    const child = enumerator.get_child(info);
+    return {
+        name: info.get_display_name(),
+        gicon: info.get_icon(),
+        contentType: info.get_content_type(),
+        uri: child.get_uri(),
+        isDirectory: info.get_file_type() === Gio.FileType.DIRECTORY,
+        thumbnailPath: info.get_attribute_byte_string('thumbnail::path'),
+        thumbnailValid: info.get_attribute_boolean('thumbnail::is-valid'),
+    };
+}
+
 export function listDirectory(path, callback) {
     const file = Gio.File.new_for_path(path);
     file.enumerate_children_async(
@@ -61,29 +76,44 @@ export function listDirectory(path, callback) {
         GLib.PRIORITY_DEFAULT,
         null,
         (source, result) => {
-            const entries = [];
+            let enumerator;
             try {
-                const enumerator = source.enumerate_children_finish(result);
-                let info = enumerator.next_file(null);
-                while (info !== null) {
-                    const child = enumerator.get_child(info);
-                    entries.push({
-                        name: info.get_display_name(),
-                        gicon: info.get_icon(),
-                        contentType: info.get_content_type(),
-                        uri: child.get_uri(),
-                        isDirectory: info.get_file_type() === Gio.FileType.DIRECTORY,
-                        thumbnailPath: info.get_attribute_byte_string('thumbnail::path'),
-                        thumbnailValid: info.get_attribute_boolean('thumbnail::is-valid'),
-                    });
-                    info = enumerator.next_file(null);
-                }
-                enumerator.close(null);
+                enumerator = source.enumerate_children_finish(result);
             } catch (error) {
                 logError(error, 'macOS Dock Stack: failed to enumerate directory');
+                callback([]);
+                return;
             }
-            entries.sort((a, b) => a.name.localeCompare(b.name));
-            callback(entries);
+
+            const entries = [];
+
+            // next_files_async, not the synchronous next_file() in a loop:
+            // this runs inside the compositor's process, so a blocking
+            // call here would stall every window and animation on the
+            // desktop, not just this extension, for large folders.
+            const readNextBatch = () => {
+                enumerator.next_files_async(ENUMERATE_BATCH_SIZE, GLib.PRIORITY_DEFAULT, null, (source2, result2) => {
+                    let infos;
+                    try {
+                        infos = source2.next_files_finish(result2);
+                    } catch (error) {
+                        logError(error, 'macOS Dock Stack: failed to read directory entries');
+                        infos = [];
+                    }
+
+                    if (infos.length === 0) {
+                        enumerator.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
+                        entries.sort((a, b) => a.name.localeCompare(b.name));
+                        callback(entries);
+                        return;
+                    }
+
+                    for (const info of infos)
+                        entries.push(toEntry(enumerator, info));
+                    readNextBatch();
+                });
+            };
+            readNextBatch();
         }
     );
 }

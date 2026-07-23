@@ -110,9 +110,18 @@ export class DockIntegration {
         // If the dash rebuilds its own children (e.g. favorites or
         // running apps changed) our foreign actor is generally left
         // alone, but re-insert defensively if it ever gets detached.
+        // Re-inserting itself fires another 'child-added', so this
+        // checks the parent first (no-op on the re-entrant call) and
+        // is wrapped in try/catch in case the actor was destroyed
+        // outright by whatever rebuilt the box.
         const childAddedId = box.connect('child-added', () => {
-            if (actor.get_parent() !== box)
+            if (actor.get_parent() === box)
+                return;
+            try {
                 this._insertBeforeTrailer(actor, box);
+            } catch (error) {
+                // Nothing more we can do until the next _rebuild() pass.
+            }
         });
 
         this._injected.push({ actor, box, childAddedId });
@@ -140,7 +149,7 @@ export class DockIntegration {
             }
         }
         if (!gicon)
-            gicon = new Gio.ThemedIcon({ name: 'folder-symbolic' });
+            gicon = new Gio.ThemedIcon({ name: 'folder' }); // full-color, not -symbolic
 
         const icon = new St.Icon({
             gicon,
