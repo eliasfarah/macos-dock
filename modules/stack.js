@@ -185,7 +185,15 @@ export class Stack {
 
         const mode = this._settings.displayMode;
         const columns = clamp(this._settings.gridColumns, 2, 8);
-        const width = clamp(this._settings.panelSize, 240, workArea.width - PANEL_MARGIN * 2);
+
+        // panelSize and gridColumns are independent settings, so a valid
+        // combination (e.g. 8 columns with the default/minimum panel
+        // width) can otherwise ask for a narrower panel than the columns
+        // need — items would overflow past the rounded corners and get
+        // clipped. Never go narrower than what the configured columns
+        // actually require.
+        const minGridWidth = mode === 'grid' ? columns * ITEM_WIDTH + PANEL_MARGIN * 2 : 0;
+        const width = clamp(Math.max(this._settings.panelSize, minGridWidth), 240, workArea.width - PANEL_MARGIN * 2);
 
         let height;
         let contentHeight;
@@ -421,14 +429,24 @@ export class Stack {
     }
 
     _layoutStack(geometry) {
-        const centerX = (geometry.width - ITEM_WIDTH) / 2;
-        const centerY = (geometry.height - ITEM_HEIGHT) / 2;
+        // Unlike _layoutFan (whose radius is fixed and only the angular
+        // spread compresses), a flat "8px per item" cascade grows without
+        // bound — with enough files, later items land outside the panel
+        // entirely and (this mode has no scroll view) become permanently
+        // unreachable. Shrink the per-item step so the whole cascade
+        // always fits inside the available area, however many items.
+        const count = this._items.length;
+        const maxStepX = count > 1 ? (geometry.width - ITEM_WIDTH) / (count - 1) : 8;
+        const maxStepY = count > 1 ? (geometry.height - ITEM_HEIGHT) / (count - 1) : 8;
+        const step = Math.max(2, Math.min(8, maxStepX, maxStepY));
+        const totalCascade = step * (count - 1);
+
+        const startX = (geometry.width - ITEM_WIDTH - totalCascade) / 2;
+        const startY = (geometry.height - ITEM_HEIGHT + totalCascade) / 2;
+
         this._items.forEach((item, index) => {
-            const cascade = index * 8;
-            const x = centerX + cascade;
-            const y = centerY - cascade;
-            item.set_position(x, y);
-            item.rotation_angle_z = index * 1.5;
+            item.set_position(startX + index * step, startY - index * step);
+            item.rotation_angle_z = index * Math.min(1.5, 15 / Math.max(1, count));
         });
     }
 
@@ -507,6 +525,12 @@ export class Stack {
             this._panel.disconnect(this._leaveId);
             this._leaveId = 0;
         }
+        // Closing right after the pointer leaves can catch _resetParallax()'s
+        // "return to neutral" spring still in-flight; cancel it first so its
+        // next frame doesn't immediately overwrite the direct reset below
+        // (same race already handled in _updateParallax).
+        cancelSpring(this._panel);
+        cancelSpring(this._glare);
         if (this._panel)
             this._panel.rotation_angle_y = 0;
         if (this._glare)
