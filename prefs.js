@@ -9,6 +9,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
@@ -175,7 +176,25 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
         for (const stack of stacks) {
             const row = new Adw.EntryRow({ title: _('Nome'), text: stack.name });
             row.add_suffix(this._removeButton(settings, stack.id, group));
-            row.connect('changed', () => settings.updateStack(stack.id, { name: row.text }));
+
+            // Debounced, not written on every keystroke: this same
+            // 'stacks' GSettings key is also watched by the running
+            // extension's DockIntegration, which rebuilds every dock
+            // icon on the real desktop on each change — writing per
+            // character would flicker the live dock while typing.
+            row.connect('changed', () => {
+                if (row._saveTimeoutId)
+                    GLib.Source.remove(row._saveTimeoutId);
+                row._saveTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+                    row._saveTimeoutId = 0;
+                    settings.updateStack(stack.id, { name: row.text });
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
+            row.connect('destroy', () => {
+                if (row._saveTimeoutId)
+                    GLib.Source.remove(row._saveTimeoutId);
+            });
 
             const path = new Adw.ActionRow({ subtitle: stack.path, selectable: false });
             path.add_css_class('dim-label');
