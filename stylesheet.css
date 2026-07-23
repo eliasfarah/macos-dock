@@ -1,0 +1,83 @@
+/* stylesheet.css
+ *
+ * Visual language for the stack panel: a Finder-like glass surface —
+ * rounded corners, translucent tint, a soft top sheen and an inset
+ * border/highlight — plus the dash icon and grid item styling.
+ * Loaded automatically by GNOME Shell while the extension is enabled.
+ */
+
+.macos-stack-panel {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.macos-stack-panel-tint {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(54, 54, 58, 0.55);
+  background-gradient-end: rgba(26, 26, 30, 0.78);
+}
+
+.macos-stack-panel-sheen {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.18);
+  background-gradient-end: rgba(255, 255, 255, 0);
+}
+
+.macos-stack-panel-border {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset;
+}
+
+.macos-stack-panel-glare {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.macos-stack-panel-content {
+  padding: 0;
+}
+
+.macos-stack-shadow {
+  background-color: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 18px 40px 4px rgba(0, 0, 0, 0.45);
+}
+
+.macos-stack-item {
+  border-radius: 12px;
+  background-color: transparent;
+  transition-duration: 120ms;
+}
+
+.macos-stack-item:hover,
+.macos-stack-item:focus {
+  background-color: rgba(255, 255, 255, 0.10);
+}
+
+.macos-stack-item:active {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+.macos-stack-item-box {
+  spacing: 4px;
+  padding: 6px;
+}
+
+.macos-stack-item-icon {
+  -st-icon-style: symbolic;
+}
+
+.macos-stack-item-label {
+  font-size: 11px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.macos-stack-dash-icon {
+  border-radius: 10px;
+}
+
+.macos-stack-dash-icon:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.macos-stack-dash-icon-image {
+  padding: 4px;
+}

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.macos-dock-stack" path="/org/gnome/shell/extensions/macos-dock-stack/">
+
+    <key name="animation-speed" type="d">
+      <range min="0.5" max="2.5"/>
+      <default>1.0</default>
+      <summary>Velocidade da animação</summary>
+      <description>Multiplicador de velocidade aplicado às animações de mola. Valores maiores tornam a abertura/fechamento mais rápidos.</description>
+    </key>
+
+    <key name="blur-intensity" type="d">
+      <range min="0" max="100"/>
+      <default>45.0</default>
+      <summary>Intensidade do blur</summary>
+      <description>Intensidade do desfoque de fundo (vidro) do painel, de 0 (sem blur) a 100 (máximo).</description>
+    </key>
+
+    <key name="panel-size" type="i">
+      <range min="240" max="960"/>
+      <default>460</default>
+      <summary>Tamanho do painel</summary>
+      <description>Largura alvo, em pixels, do painel do stack.</description>
+    </key>
+
+    <key name="open-direction" type="s">
+      <choices>
+        <choice value="auto"/>
+        <choice value="up"/>
+        <choice value="down"/>
+      </choices>
+      <default>"auto"</default>
+      <summary>Direção de abertura</summary>
+      <description>Direção em que o painel se expande a partir do ícone: para cima, para baixo, ou automático conforme o espaço disponível na tela.</description>
+    </key>
+
+    <key name="grid-columns" type="i">
+      <range min="2" max="8"/>
+      <default>5</default>
+      <summary>Colunas da grade</summary>
+      <description>Número de colunas usado no modo de exibição em grade.</description>
+    </key>
+
+    <key name="display-mode" type="s">
+      <choices>
+        <choice value="grid"/>
+        <choice value="fan"/>
+        <choice value="stack"/>
+      </choices>
+      <default>"grid"</default>
+      <summary>Modo de exibição</summary>
+      <description>Layout usado para dispor os itens: grade, leque (fan) ou pilha.</description>
+    </key>
+
+    <key name="panel-opacity" type="d">
+      <range min="20" max="100"/>
+      <default>88.0</default>
+      <summary>Opacidade do painel</summary>
+      <description>Opacidade do fundo de vidro do painel, de 20 a 100.</description>
+    </key>
+
+    <key name="shadow-enabled" type="b">
+      <default>true</default>
+      <summary>Sombra ativada</summary>
+      <description>Exibe uma sombra dinâmica sob o painel do stack.</description>
+    </key>
+
+    <key name="overshoot-enabled" type="b">
+      <default>true</default>
+      <summary>Overshoot ativado</summary>
+      <description>Quando ativado, a animação de mola ultrapassa levemente o valor final antes de assentar (~3%), como no Core Animation. Quando desativado, usa uma curva quase crítica sem oscilação.</description>
+    </key>
+
+    <key name="stagger-delay" type="i">
+      <range min="10" max="60"/>
+      <default>28</default>
+      <summary>Atraso entre itens</summary>
+      <description>Atraso, em milissegundos, entre o início da animação de cada item (stagger animation).</description>
+    </key>
+
+    <key name="stacks" type="s">
+      <default>'[]'</default>
+      <summary>Stacks configurados</summary>
+      <description>Lista, codificada em JSON, dos stacks configurados (id, nome, caminho da pasta, ícone e modo de exibição).</description>
+    </key>
+
+  </schema>
+</schemalist>

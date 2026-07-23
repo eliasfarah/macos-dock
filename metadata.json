@@ -1,0 +1,10 @@
+{
+  "uuid": "macos-dock-stack@eliasfa.gmail.com",
+  "name": "macOS Dock Stack",
+  "description": "Reproduz fielmente a animação de Stack da Dock do macOS (Finder Stack): um ícone da dock configurado como pasta se expande, a partir do próprio ícone, em um painel de vidro com efeito de mola (spring), blur de fundo e revelação escalonada dos itens.",
+  "shell-version": ["46", "47", "48"],
+  "url": "",
+  "version-name": "1.0.0",
+  "settings-schema": "org.gnome.shell.extensions.macos-dock-stack",
+  "gettext-domain": "macos-dock-stack"
+}
