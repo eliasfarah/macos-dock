@@ -85,12 +85,21 @@ export function animateSpring(target, fromProps, toProps, options = {}) {
         preset = SPRING.PANEL,
         onUpdate = null,
         onComplete = null,
+        // A Clutter.Timeline only actually starts if it's bound to either
+        // an actor that has a stage, or an explicit frame clock — a bare
+        // `new Clutter.Timeline({duration})` has neither, so start() is a
+        // silent no-op (a "runtime check failed" Clutter-WARNING, not a
+        // thrown error) and nothing ever animates. `target` itself is the
+        // actor to bind to in the common case; callers animating a
+        // non-actor GObject (e.g. Shell.BlurEffect) must pass the real
+        // on-stage actor driving that effect via `actor`.
+        actor = target,
     } = options;
 
     cancelSpring(target);
 
     const realDuration = Math.max(1, Math.round(duration / Math.max(0.01, speed)));
-    const timeline = new Clutter.Timeline({ duration: realDuration });
+    const timeline = Clutter.Timeline.new_for_actor(actor, realDuration);
     const keys = Object.keys(toProps);
 
     timeline.connect('new-frame', (_tl, elapsedMs) => {

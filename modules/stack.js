@@ -21,6 +21,7 @@ import { listDirectory, launchUri, clamp } from './utils.js';
 const ITEM_WIDTH = 84;
 const ITEM_HEIGHT = 92;
 const ITEM_ICON_SIZE = 48;
+const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
 const ICON_GAP = 18; // gap kept between the dock icon and the panel
 const CORNER_RADIUS = 18;
@@ -140,7 +141,7 @@ export class Stack {
             }
             if (this._blurEffect) {
                 animateSpring(this._blurEffect, { radius: this._blurEffect.radius }, { radius: 0 },
-                    { duration: 280, speed, preset: SPRING.SOFT });
+                    { duration: 280, speed, preset: SPRING.SOFT, actor: this._panel });
             }
         };
 
@@ -283,7 +284,19 @@ export class Stack {
             overlay_scrollbars: true, // thin, auto-hiding — not a GTK trough
             x_expand: true, y_expand: true,
         });
-        this._scrollView.set_child(this._gridWidget);
+        // Not set_child(): St.ScrollView's `child` property/setter requires
+        // an actor implementing the St.Scrollable interface (St.Viewport),
+        // and throws "cannot convert to StScrollable" for a plain
+        // St.Widget — confirmed live (headless test, GNOME Shell 50) as
+        // the actual reason folder-stacks silently failed to open: the
+        // exception was thrown inside openStack()'s async
+        // listDirectory callback and swallowed with nothing visible.
+        // add_child() is the plain Clutter.Actor method, which
+        // St.ScrollView also accepts directly and scrolls correctly —
+        // the same pattern the already-working dash-to-dock extension
+        // uses on this GNOME version (its own addActor() helper falls
+        // back to add_child() once add_actor() is gone).
+        this._scrollView.add_child(this._gridWidget);
         content.add_child(this._scrollView);
 
         this._panel.set({ scale_x: 0.05, scale_y: 0.05, opacity: 0 });
@@ -370,10 +383,22 @@ export class Stack {
             style_class: 'macos-stack-item-icon',
         });
 
-        const label = new St.Label({ text: entry.name, style_class: 'macos-stack-item-label' });
+        // Clutter.Text has no set_lines()/"max lines" API at all (that's
+        // a Gtk.Label-ism) — calling it threw a TypeError inside the
+        // async listDirectory callback every time a stack was opened,
+        // silently aborting the whole open (confirmed live via headless
+        // testing: this is why folder-stacks appeared to do nothing on
+        // click). The correct native way to clamp wrapped text to N
+        // lines with a trailing ellipsis is line_wrap + ellipsize
+        // together with a capped actor height — Pango wraps up to
+        // whatever fits in that height and ellipsizes the last line.
+        const label = new St.Label({
+            text: entry.name,
+            style_class: 'macos-stack-item-label',
+            height: LABEL_MAX_HEIGHT,
+        });
         label.clutter_text.set_line_wrap(true);
         label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
-        label.clutter_text.set_lines(2);
 
         box.add_child(icon);
         box.add_child(label);
@@ -467,7 +492,7 @@ export class Stack {
         const speed = this._settings.animationSpeed;
         const targetRadius = (this._settings.blurIntensity / 100) * MAX_BLUR_RADIUS;
         animateSpring(this._blurEffect, { radius: 0 }, { radius: targetRadius },
-            { duration: 420, speed, preset: SPRING.SOFT });
+            { duration: 420, speed, preset: SPRING.SOFT, actor: this._panel });
     }
 
     animateShadow() {

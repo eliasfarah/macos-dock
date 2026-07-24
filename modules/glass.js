@@ -17,12 +17,21 @@ import Shell from 'gi://Shell';
  * actors to this), and the `blurEffect` so callers can animate its
  * `radius` property independently of the panel's own transform.
  */
-export function createGlassPanel({ cornerRadius = 18 } = {}) {
+export function createGlassPanel({ cornerRadius = 18, clipContent = true } = {}) {
+    // clip_to_allocation clips every child to the panel's own rectangle,
+    // including `content`. The Stack panel wants that (a fixed-size glass
+    // sheet with a scrolling item grid), but the dock does not: a
+    // magnified icon needs to visually overflow above the dock bar, the
+    // way it does on real macOS, rather than being cut off at the bar's
+    // top edge. The background layers (blur/tint/sheen/border) all carry
+    // their own border-radius via set_style() below, so they stay rounded
+    // on their own regardless of this flag — only `content`'s clipping
+    // actually changes.
     const panel = new St.Widget({
         style_class: 'macos-stack-panel',
         layout_manager: new Clutter.BinLayout(),
         reactive: true,
-        clip_to_allocation: true,
+        clip_to_allocation: clipContent,
     });
     panel.set_style(`border-radius: ${cornerRadius}px;`);
 

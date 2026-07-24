@@ -102,7 +102,10 @@ export class DockManager {
     // -- chrome ----------------------------------------------------------
 
     _buildChrome() {
-        const { panel, content, blurEffect } = createGlassPanel({ cornerRadius: DOCK_RADIUS });
+        // clipContent: false — a magnified icon needs to overflow above
+        // the dock bar's own rectangle (see glass.js), not be clipped to
+        // it the way the Stack panel's item grid is.
+        const { panel, content, blurEffect } = createGlassPanel({ cornerRadius: DOCK_RADIUS, clipContent: false });
         this._dockActor = panel;
         this._content = content;
         this._dockActor.set({ reactive: true });
@@ -176,7 +179,17 @@ export class DockManager {
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
         const margin = this._settings.dockEdgeMargin;
 
-        const [, naturalWidth] = this._dockActor.get_preferred_width(-1);
+        // Measure the icon row itself, not the panel actor: the panel's
+        // own get_preferred_width() goes through two nested BinLayout
+        // levels (panel -> content), and BinLayout reports the *max* of
+        // its overlapping children's preferred sizes — the blur/tint/
+        // sheen/border layers are all x_expand with no intrinsic size of
+        // their own, so that max collapses to something far smaller than
+        // what the icon row actually needs (confirmed live: 202px
+        // reported vs. 684px actually required for 6 icons) and the
+        // panel's own clip_to_allocation then silently hides every icon
+        // past that too-narrow width.
+        const [, naturalWidth] = this._iconBox.get_preferred_width(-1);
         const width = clamp(naturalWidth, DOCK_MIN_WIDTH, workArea.width - margin * 2);
         const height = this._settings.dockIconSize + DOCK_VERTICAL_PADDING * 2;
 
@@ -381,6 +394,20 @@ export class DockManager {
             const distance = stageX - geometry.centerX;
             const scale = 1 + (amount - 1) * Math.exp(-(distance * distance) / (2 * range * range));
 
+            // A 'motion-event' fires many times per second, and every
+            // animateSpring() call restarts the underdamped spring's
+            // clock from t=0 (cancelSpring + a brand-new Timeline) — with
+            // near-continuous small target changes, the icon kept
+            // replaying only the curve's slow initial ramp and never
+            // reached its snappier back half, which reads as slow-motion
+            // rather than live tracking. Skipping re-targets that aren't
+            // a meaningful change lets each spring actually run long
+            // enough to be felt as motion, not just restarted.
+            const lastTarget = icon._magnifyTarget ?? 1;
+            if (Math.abs(scale - lastTarget) < 0.02)
+                continue;
+            icon._magnifyTarget = scale;
+
             // Re-targets from the icon's current (possibly mid-animation)
             // scale rather than resetting to 1 first, so continuous pointer
             // movement reads as smooth tracking, not a jump each frame.
@@ -393,6 +420,7 @@ export class DockManager {
 
     _resetMagnification() {
         for (const icon of this._magnifiableIcons()) {
+            icon._magnifyTarget = 1;
             animateSpring(icon,
                 { scale_x: icon.scale_x, scale_y: icon.scale_y },
                 { scale_x: 1, scale_y: 1 },
