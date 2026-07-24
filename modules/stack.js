@@ -266,14 +266,31 @@ export class Stack {
 
         this._shadow = createShadowActor({ cornerRadius: CORNER_RADIUS });
 
-        this._gridWidget = new St.Widget({
+        // St.BoxLayout, not plain St.Widget: St.ScrollView.set_child()
+        // requires its child to implement the St.Scrollable interface
+        // (confirmed via GIRepository introspection —
+        // GObject.type_is_a(St.BoxLayout, St.Scrollable) is true,
+        // St.Widget's is false), which is also why the child actually
+        // gets allocated a size/position by the scroll view's own
+        // viewport logic. A previous fix swapped set_child() for
+        // add_child() to dodge the "cannot convert to StScrollable"
+        // exception that a plain St.Widget threw there — that stopped
+        // the crash, but add_child() only inserts the actor into the
+        // scene graph without ever feeding it through the scroll view's
+        // adjustment/allocation cycle, so the grid (and every item
+        // inside it) rendered with no allocation at all: invisible,
+        // confirmed live via "Can't update stage views ... needs an
+        // allocation" warnings in the real session's journal for
+        // exactly these actor types (StBoxLayout/StIcon/StLabel) — the
+        // panel chrome still showed, hence an empty-looking balloon.
+        // The layout_manager override below still applies on top of
+        // St.BoxLayout: _layoutGrid/_layoutFan/_layoutStack position
+        // each item with set_position(), which BoxLayout's own default
+        // layout would fight, but Clutter.FixedLayout (which honors
+        // manually-set positions) works the same on any St.Widget
+        // subclass regardless of which one it is.
+        this._gridWidget = new St.BoxLayout({
             style_class: 'macos-stack-grid',
-            // FixedLayout, not BinLayout: _layoutGrid/_layoutFan/_layoutStack
-            // position each item with set_position(), which BinLayout would
-            // ignore (it aligns children via x-align/y-align instead of
-            // honoring a fixed position) — every item would collapse onto
-            // the same spot. FixedLayout is the one that actually respects
-            // manually-set child positions.
             layout_manager: new Clutter.FixedLayout(),
         });
 
@@ -284,19 +301,7 @@ export class Stack {
             overlay_scrollbars: true, // thin, auto-hiding — not a GTK trough
             x_expand: true, y_expand: true,
         });
-        // Not set_child(): St.ScrollView's `child` property/setter requires
-        // an actor implementing the St.Scrollable interface (St.Viewport),
-        // and throws "cannot convert to StScrollable" for a plain
-        // St.Widget — confirmed live (headless test, GNOME Shell 50) as
-        // the actual reason folder-stacks silently failed to open: the
-        // exception was thrown inside openStack()'s async
-        // listDirectory callback and swallowed with nothing visible.
-        // add_child() is the plain Clutter.Actor method, which
-        // St.ScrollView also accepts directly and scrolls correctly —
-        // the same pattern the already-working dash-to-dock extension
-        // uses on this GNOME version (its own addActor() helper falls
-        // back to add_child() once add_actor() is gone).
-        this._scrollView.add_child(this._gridWidget);
+        this._scrollView.set_child(this._gridWidget);
         content.add_child(this._scrollView);
 
         this._panel.set({ scale_x: 0.05, scale_y: 0.05, opacity: 0 });
