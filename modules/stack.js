@@ -12,6 +12,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import Pango from 'gi://Pango';
+import Graphene from 'gi://Graphene';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { SPRING, animateSpring, animateStagger, cancelSpring } from './animations.js';
@@ -21,13 +22,22 @@ import { listDirectory, launchUri, clamp } from './utils.js';
 const ITEM_WIDTH = 84;
 const ITEM_HEIGHT = 92;
 const ITEM_ICON_SIZE = 48;
+// macOS' third stack view is a List: one compact row per file, small
+// icon on the left, name beside it. What used to live under the same
+// setting was a cascading pile of overlapping, rotated tiles — a look
+// that corresponds to nothing in macOS, and the reason an opened stack
+// read as "nada parecido com mac" for anyone who had that mode selected.
+const LIST_ROW_HEIGHT = 26;
+const LIST_ICON_SIZE = 18;
+const LIST_MARGIN = 8;
 const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
-const ICON_GAP = 18; // gap kept between the dock icon and the panel
+const ARROW_SQUARE = 16; // side of the square that, rotated 45°, forms the pointer
+const ARROW_WIDTH = Math.round(ARROW_SQUARE * Math.SQRT2);
+const ARROW_HEIGHT = Math.round((ARROW_SQUARE * Math.SQRT2) / 2);
+const ICON_GAP = ARROW_HEIGHT + 8; // panel clears the dock icon by the pointer's height
 const CORNER_RADIUS = 18;
 const MAX_BLUR_RADIUS = 60;
-const MAX_TILT_DEGREES = 2.5; // subtle — a hint of parallax, not a flip
-const GLARE_OPACITY = 45;
 
 /** One configured folder-stack, bound to a dock icon on open(). */
 export class Stack {
@@ -39,7 +49,9 @@ export class Stack {
         this._content = null;
         this._shadow = null;
         this._blurEffect = null;
-        this._glare = null;
+        this._tint = null;
+        this._arrow = null;
+        this._arrowSquare = null;
         this._scrollView = null;
         this._gridWidget = null;
         this._items = [];
@@ -50,8 +62,6 @@ export class Stack {
         this._clickCatcher = null;
         this._catcherPressId = 0;
         this._keyPressId = 0;
-        this._motionId = 0;
-        this._leaveId = 0;
         this._timeouts = [];
 
         this._iconActor = null;
@@ -91,6 +101,7 @@ export class Stack {
             const geometry = this.positionPanel(origin);
             this._applyGeometry(geometry);
             this._setPivotFromOrigin(origin, geometry);
+            this._layoutArrow(origin, geometry);
             this._layoutItems(geometry);
 
             this._grabInput();
@@ -100,7 +111,6 @@ export class Stack {
                 this._isAnimating = false;
                 this._isOpen = true;
                 this.animateItems();
-                this._enableParallax();
             });
         });
     }
@@ -111,7 +121,6 @@ export class Stack {
 
         this._isAnimating = true;
         this._releaseInput();
-        this._disableParallax();
 
         const speed = this._settings.animationSpeed;
         const itemDelay = Math.max(8, Math.round(this._settings.staggerDelay / 2));
@@ -187,28 +196,49 @@ export class Stack {
         const mode = this._settings.displayMode;
         const columns = clamp(this._settings.gridColumns, 2, 8);
 
-        // panelSize and gridColumns are independent settings, so a valid
-        // combination (e.g. 8 columns with the default/minimum panel
-        // width) can otherwise ask for a narrower panel than the columns
-        // need — items would overflow past the rounded corners and get
-        // clipped. Never go narrower than what the configured columns
-        // actually require.
-        const minGridWidth = mode === 'grid' ? columns * ITEM_WIDTH + PANEL_MARGIN * 2 : 0;
-        const width = clamp(Math.max(this._settings.panelSize, minGridWidth), 240, workArea.width - PANEL_MARGIN * 2);
+        // In grid mode the panel is sized to its *contents*, the way a
+        // real Finder stack is: a folder holding two files opens a small
+        // two-item panel, not a fixed-width sheet with a large empty
+        // area beside them (which is what a flat `panel-size` floor
+        // produced — the single biggest reason this stopped reading as
+        // macOS). `panel-size` still applies, but as a ceiling on how
+        // wide the grid may get rather than a floor forcing it open, and
+        // gridColumns still caps the columns independently.
+        let effectiveColumns = columns;
+        if (mode === 'grid') {
+            const columnsAllowedByWidth = Math.max(1,
+                Math.floor((this._settings.panelSize - PANEL_MARGIN * 2) / ITEM_WIDTH));
+            effectiveColumns = Math.max(1,
+                Math.min(columns, columnsAllowedByWidth, this._entries.length || 1));
+        }
+
+        const gridWidth = effectiveColumns * ITEM_WIDTH + PANEL_MARGIN * 2;
+        let width;
+        if (mode === 'grid')
+            width = clamp(gridWidth, ITEM_WIDTH + PANEL_MARGIN * 2, workArea.width - PANEL_MARGIN * 2);
+        else if (mode === 'stack') // list
+            width = clamp(this._settings.panelSize, 180, workArea.width - PANEL_MARGIN * 2);
+        else
+            width = clamp(this._settings.panelSize, 240, workArea.width - PANEL_MARGIN * 2);
 
         let height;
         let contentHeight;
         if (mode === 'grid') {
-            const rows = Math.max(1, Math.ceil(this._entries.length / columns));
+            const rows = Math.max(1, Math.ceil(this._entries.length / effectiveColumns));
             // The panel/viewport height is clamped to fit the screen, but
             // the grid's own content can be taller — it scrolls instead of
             // silently clipping files past the visible rows.
             contentHeight = rows * ITEM_HEIGHT + PANEL_MARGIN * 2;
-            height = clamp(contentHeight, 160, workArea.height - PANEL_MARGIN * 2);
+            height = clamp(contentHeight, ITEM_HEIGHT + PANEL_MARGIN * 2, workArea.height - PANEL_MARGIN * 2);
+        } else if (mode === 'stack') {
+            // List: one row per file, sized to the row count and
+            // scrolling once it would run off the screen.
+            contentHeight = Math.max(1, this._entries.length) * LIST_ROW_HEIGHT + LIST_MARGIN * 2;
+            height = clamp(contentHeight, LIST_ROW_HEIGHT + LIST_MARGIN * 2, workArea.height - PANEL_MARGIN * 2);
         } else {
-            // Fan / stack modes want open space to spread items in, so
-            // they use a squarer area rather than growing with rows, and
-            // don't scroll — items are deliberately laid out to fit.
+            // Fan wants open space to spread items into, so it uses a
+            // squarer area rather than growing with rows, and doesn't
+            // scroll — items are deliberately laid out to fit.
             height = clamp(width * 0.72, 200, workArea.height - PANEL_MARGIN * 2);
             contentHeight = height;
         }
@@ -228,7 +258,7 @@ export class Stack {
         else
             y = Math.min(workArea.y + workArea.height - height - PANEL_MARGIN, origin.iconBottom + ICON_GAP);
 
-        this._geometry = { x, y, width, height, direction, columns, contentHeight };
+        this._geometry = { x, y, width, height, direction, columns: effectiveColumns, contentHeight };
         return this._geometry;
     }
 
@@ -258,11 +288,21 @@ export class Stack {
         if (this._built)
             return;
 
-        const { panel, content, blurEffect, glare } = createGlassPanel({ cornerRadius: CORNER_RADIUS });
+        // clipContent: false — the pointer/arrow below is a child of the
+        // panel (so it inherits the open/close spring for free) but sits
+        // outside the panel's own rectangle, and would be clipped away
+        // entirely otherwise. Safe to drop here: the item grid is
+        // clipped by its own St.ScrollView viewport, and every
+        // background layer carries its own border-radius, so the panel's
+        // clip was never what kept those in shape.
+        const { panel, content, blurEffect, tint } = createGlassPanel({
+            cornerRadius: CORNER_RADIUS,
+            clipContent: false,
+        });
         this._panel = panel;
         this._content = content;
         this._blurEffect = blurEffect;
-        this._glare = glare;
+        this._tint = tint;
 
         this._shadow = createShadowActor({ cornerRadius: CORNER_RADIUS });
 
@@ -304,6 +344,8 @@ export class Stack {
         this._scrollView.set_child(this._gridWidget);
         content.add_child(this._scrollView);
 
+        this._createArrow();
+
         this._panel.set({ scale_x: 0.05, scale_y: 0.05, opacity: 0 });
 
         Main.layoutManager.addChrome(this._shadow, { trackFullscreen: true });
@@ -312,11 +354,100 @@ export class Stack {
         this._built = true;
     }
 
+    /**
+     * The little triangle that ties the panel back to the dock icon it
+     * came from — the single most recognisable piece of a macOS Finder
+     * stack, and something this panel simply never drew.
+     *
+     * Built as a square rotated 45° inside a container clipped to half
+     * the resulting diamond's height, so only the lower (downward-
+     * pointing) triangle shows. That gets the two angled edges *and*
+     * their border for free; drawing a real triangle would otherwise
+     * mean a Clutter.Canvas and hand-rolled Cairo paths.
+     *
+     * It is a child of the panel rather than a sibling so it inherits
+     * the panel's own open/close spring, pivot and opacity — no second
+     * animation to keep in sync.
+     */
+    _createArrow() {
+        this._arrow = new St.Widget({
+            width: ARROW_WIDTH,
+            height: ARROW_HEIGHT,
+            clip_to_allocation: true,
+            layout_manager: new Clutter.FixedLayout(),
+            // START alignment stops the panel's BinLayout from
+            // stretching it; actual placement is done with
+            // translation_x/y, a post-allocation transform the layout
+            // manager won't overwrite (a post-allocation transform the
+            // BinLayout does not get to override).
+            x_align: Clutter.ActorAlign.START,
+            y_align: Clutter.ActorAlign.START,
+        });
+
+        this._arrowSquare = new St.Widget({
+            style_class: 'macos-stack-arrow',
+            width: ARROW_SQUARE,
+            height: ARROW_SQUARE,
+            pivot_point: new Graphene.Point({ x: 0.5, y: 0.5 }),
+            rotation_angle_z: 45,
+        });
+        // Centred horizontally, with the diamond's own centre level with
+        // the container's top edge, so the clip keeps exactly its lower
+        // half.
+        this._arrowSquare.set_position(
+            Math.round(ARROW_WIDTH / 2 - ARROW_SQUARE / 2),
+            Math.round(-ARROW_SQUARE / 2));
+
+        this._arrow.add_child(this._arrowSquare);
+        this._panel.add_child(this._arrow);
+    }
+
+    /**
+     * Points the arrow at the dock icon the stack opened from, and
+     * flips it to the other edge when the panel opens downward.
+     */
+    _layoutArrow(origin, geometry) {
+        if (!this._arrow)
+            return;
+
+        const pointingUp = geometry.direction === 'down';
+        this._arrow.rotation_angle_z = pointingUp ? 180 : 0;
+        this._arrow.pivot_point = new Graphene.Point({ x: 0.5, y: 0.5 });
+
+        // Kept clear of the rounded corners so the triangle always meets
+        // a straight run of the panel's edge.
+        const x = clamp(origin.x - geometry.x - ARROW_WIDTH / 2,
+            CORNER_RADIUS, geometry.width - CORNER_RADIUS - ARROW_WIDTH);
+
+        this._arrow.translation_x = Math.round(x);
+        this._arrow.translation_y = pointingUp
+            ? Math.round(-ARROW_HEIGHT)
+            : Math.round(geometry.height);
+    }
+
     /** Refreshes the panel's tint/opacity from settings — cheap, so it
      * runs on every open even when the panel itself is being reused. */
     _applyPanelStyle() {
-        const alpha = clamp(this._settings.panelOpacity, 20, 100) / 100;
-        this._panel.set_style(`border-radius: ${CORNER_RADIUS}px; background-color: rgba(30, 30, 32, ${alpha.toFixed(2)});`);
+        // The opacity preference drives the *tint layer's* alpha, not a
+        // background colour on the root panel actor. Painting an opaque
+        // colour on the panel itself defeats the whole glass effect:
+        // the panel's own background is drawn into the framebuffer
+        // first, so Shell.BlurEffect (BACKGROUND mode, on a child of
+        // that same panel) ends up blurring that flat fill instead of
+        // the desktop behind it — the blur radius, the sheen and the
+        // border all still ran, but the result was a flat opaque grey
+        // slab. That is exactly the "fundo feio / não parece o do Mac"
+        // report. Capped well below full opacity so the blurred
+        // backdrop always stays visible through it, the way a real
+        // Finder stack reads.
+        const alpha = (clamp(this._settings.panelOpacity, 20, 100) / 100) * 0.6;
+        this._panel.set_style(`border-radius: ${CORNER_RADIUS}px;`);
+        this._tint?.set_style(
+            `border-radius: ${CORNER_RADIUS}px; background-color: rgba(28, 28, 32, ${alpha.toFixed(2)});`);
+        // The pointer is a separate actor from the tint layer, so it has
+        // to be told the same colour or it would read as a differently
+        // shaded tab stuck to the panel's edge.
+        this._arrowSquare?.set_style(`background-color: rgba(28, 28, 32, ${alpha.toFixed(2)});`);
     }
 
     /**
@@ -327,6 +458,22 @@ export class Stack {
      * because the stack is being reopened.
      */
     _syncItems(entries) {
+        // A row and a grid tile are built from different actor trees, so
+        // switching display mode has to rebuild them rather than reuse
+        // and reposition — otherwise a stack reopened in List mode would
+        // still be holding grid tiles (icon above, centred caption) laid
+        // out on list coordinates.
+        const mode = this._settings.displayMode;
+        if (this._itemsMode !== mode) {
+            for (const item of this._items) {
+                cancelSpring(item);
+                item.destroy();
+            }
+            this._items = [];
+            this._entries = [];
+            this._itemsMode = mode;
+        }
+
         const stillWanted = new Set(entries.map(e => e.uri));
         const alreadyPresent = new Set(this._entries.map(e => e.uri));
 
@@ -365,6 +512,54 @@ export class Stack {
     }
 
     _createItemActor(entry) {
+        return this._settings.displayMode === 'stack'
+            ? this._createListRowActor(entry)
+            : this._createTileActor(entry);
+    }
+
+    /** One row of the List view: small icon, then the name beside it. */
+    _createListRowActor(entry) {
+        const button = new St.Button({
+            style_class: 'macos-stack-row',
+            can_focus: true,
+            reactive: true,
+            height: LIST_ROW_HEIGHT,
+        });
+        button._entryUri = entry.uri;
+
+        const box = new St.BoxLayout({
+            vertical: false,
+            style_class: 'macos-stack-row-box',
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true, y_expand: true,
+        });
+
+        box.add_child(new St.Icon({
+            gicon: this._iconForEntry(entry),
+            icon_size: LIST_ICON_SIZE,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+
+        const label = new St.Label({
+            text: entry.name,
+            style_class: 'macos-stack-row-label',
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
+        });
+        // A row is a single line; long names truncate rather than wrap.
+        label.clutter_text.set_line_wrap(false);
+        label.clutter_text.set_ellipsize(Pango.EllipsizeMode.MIDDLE);
+        box.add_child(label);
+
+        button.set_child(box);
+        button.connect('clicked', () => {
+            launchUri(entry.uri);
+            this.closeStack();
+        });
+        return button;
+    }
+
+    _createTileActor(entry) {
         const button = new St.Button({
             style_class: 'macos-stack-item',
             can_focus: true,
@@ -422,9 +617,19 @@ export class Stack {
         if (mode === 'fan')
             this._layoutFan(geometry);
         else if (mode === 'stack')
-            this._layoutStack(geometry);
+            this._layoutList(geometry);
         else
             this._layoutGrid(geometry);
+    }
+
+    /** macOS' List view: one full-width row per file, top to bottom. */
+    _layoutList(geometry) {
+        const rowWidth = geometry.width - LIST_MARGIN * 2;
+        this._items.forEach((item, index) => {
+            item.set_size(rowWidth, LIST_ROW_HEIGHT);
+            item.set_position(LIST_MARGIN, LIST_MARGIN + index * LIST_ROW_HEIGHT);
+            item.rotation_angle_z = 0;
+        });
     }
 
     _layoutGrid(geometry) {
@@ -455,28 +660,6 @@ export class Stack {
             const y = baseY - radius * Math.cos(angle) * 0.9 - ITEM_HEIGHT / 2;
             item.set_position(x, y);
             item.rotation_angle_z = (angle * 180) / Math.PI;
-        });
-    }
-
-    _layoutStack(geometry) {
-        // Unlike _layoutFan (whose radius is fixed and only the angular
-        // spread compresses), a flat "8px per item" cascade grows without
-        // bound — with enough files, later items land outside the panel
-        // entirely and (this mode has no scroll view) become permanently
-        // unreachable. Shrink the per-item step so the whole cascade
-        // always fits inside the available area, however many items.
-        const count = this._items.length;
-        const maxStepX = count > 1 ? (geometry.width - ITEM_WIDTH) / (count - 1) : 8;
-        const maxStepY = count > 1 ? (geometry.height - ITEM_HEIGHT) / (count - 1) : 8;
-        const step = Math.max(2, Math.min(8, maxStepX, maxStepY));
-        const totalCascade = step * (count - 1);
-
-        const startX = (geometry.width - ITEM_WIDTH - totalCascade) / 2;
-        const startY = (geometry.height - ITEM_HEIGHT + totalCascade) / 2;
-
-        this._items.forEach((item, index) => {
-            item.set_position(startX + index * step, startY - index * step);
-            item.rotation_angle_z = index * Math.min(1.5, 15 / Math.max(1, count));
         });
     }
 
@@ -522,89 +705,6 @@ export class Stack {
         this._timeouts.push(...timeoutIds);
     }
 
-    // -- pointer parallax / glass glare -----------------------------------
-    //
-    // Purely cosmetic material response to the cursor: a very small tilt
-    // of the whole panel plus a soft glare that follows the pointer,
-    // like light catching a glass/aqua surface. Only active once the
-    // opening spring has fully settled (and turned off before the
-    // closing spring starts) so it never fights the panel's own
-    // rotation_angle_x, which the open/close springs also drive.
-
-    _enableParallax() {
-        if (this._motionId || !this._panel)
-            return;
-
-        this._motionId = this._panel.connect('motion-event', (_actor, event) => {
-            const [stageX, stageY] = event.get_coords();
-            this._updateParallax(stageX, stageY);
-            return Clutter.EVENT_PROPAGATE;
-        });
-        this._leaveId = this._panel.connect('leave-event', () => {
-            this._resetParallax();
-            return Clutter.EVENT_PROPAGATE;
-        });
-    }
-
-    _disableParallax() {
-        if (this._motionId) {
-            this._panel.disconnect(this._motionId);
-            this._motionId = 0;
-        }
-        if (this._leaveId) {
-            this._panel.disconnect(this._leaveId);
-            this._leaveId = 0;
-        }
-        // Closing right after the pointer leaves can catch _resetParallax()'s
-        // "return to neutral" spring still in-flight; cancel it first so its
-        // next frame doesn't immediately overwrite the direct reset below
-        // (same race already handled in _updateParallax).
-        cancelSpring(this._panel);
-        cancelSpring(this._glare);
-        if (this._panel)
-            this._panel.rotation_angle_y = 0;
-        if (this._glare)
-            this._glare.opacity = 0;
-    }
-
-    _updateParallax(stageX, stageY) {
-        // A leave→enter within the same idle period can catch the
-        // "return to neutral" spring from _resetParallax() still
-        // in-flight; cancel it so our direct writes below aren't
-        // fighting its per-frame updates on the same properties.
-        cancelSpring(this._panel);
-
-        const g = this._geometry;
-        const localX = clamp((stageX - g.x) / g.width, 0, 1);
-        const localY = clamp((stageY - g.y) / g.height, 0, 1);
-
-        this._panel.rotation_angle_y = (localX - 0.5) * 2 * MAX_TILT_DEGREES;
-        this._panel.rotation_angle_x = -(localY - 0.5) * 2 * MAX_TILT_DEGREES;
-
-        if (this._glare) {
-            this._glare.set({
-                translation_x: stageX - g.x - this._glare.width / 2,
-                translation_y: stageY - g.y - this._glare.height / 2,
-                opacity: GLARE_OPACITY,
-            });
-        }
-    }
-
-    _resetParallax() {
-        if (!this._panel)
-            return;
-        const speed = this._settings.animationSpeed;
-        animateSpring(this._panel,
-            { rotation_angle_x: this._panel.rotation_angle_x, rotation_angle_y: this._panel.rotation_angle_y },
-            { rotation_angle_x: 0, rotation_angle_y: 0 },
-            { duration: 260, speed, preset: SPRING.SOFT });
-
-        if (this._glare) {
-            animateSpring(this._glare, { opacity: this._glare.opacity }, { opacity: 0 },
-                { duration: 220, speed, preset: SPRING.SOFT });
-        }
-    }
-
     // -- input handling --------------------------------------------------
 
     _grabInput() {
@@ -645,7 +745,6 @@ export class Stack {
     // -- teardown --------------------------------------------------------
 
     destroyStack() {
-        this._disableParallax();
         this._releaseInput();
 
         for (const id of this._timeouts) {
@@ -660,7 +759,6 @@ export class Stack {
         cancelSpring(this._panel);
         cancelSpring(this._shadow);
         cancelSpring(this._blurEffect);
-        cancelSpring(this._glare);
         for (const item of this._items)
             cancelSpring(item);
 
@@ -671,7 +769,9 @@ export class Stack {
         this._content = null;
         this._shadow = null;
         this._blurEffect = null;
-        this._glare = null;
+        this._tint = null;
+        this._arrow = null;
+        this._arrowSquare = null;
         this._scrollView = null;
         this._gridWidget = null;
         this._items = [];

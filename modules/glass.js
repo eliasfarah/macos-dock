@@ -17,7 +17,7 @@ import Shell from 'gi://Shell';
  * actors to this), and the `blurEffect` so callers can animate its
  * `radius` property independently of the panel's own transform.
  */
-export function createGlassPanel({ cornerRadius = 18, clipContent = true } = {}) {
+export function createGlassPanel({ cornerRadius = 18, clipContent = true, variant = 'macos-stack-panel' } = {}) {
     // clip_to_allocation clips every child to the panel's own rectangle,
     // including `content`. The Stack panel wants that (a fixed-size glass
     // sheet with a scrolling item grid), but the dock does not: a
@@ -27,8 +27,14 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true } = {})
     // their own border-radius via set_style() below, so they stay rounded
     // on their own regardless of this flag — only `content`'s clipping
     // actually changes.
+    // `variant` namespaces every layer's style class. The dock and the
+    // Stack panel are both built by this function but are two visually
+    // distinct surfaces (a dark, always-on bar vs. a lighter floating
+    // sheet), so they must not share one set of CSS rules — they did
+    // originally, and restyling the Stack panel's glass silently
+    // repainted the whole dock along with it.
     const panel = new St.Widget({
-        style_class: 'macos-stack-panel',
+        style_class: variant,
         layout_manager: new Clutter.BinLayout(),
         reactive: true,
         clip_to_allocation: clipContent,
@@ -36,7 +42,7 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true } = {})
     panel.set_style(`border-radius: ${cornerRadius}px;`);
 
     const blur = new St.Widget({
-        style_class: 'macos-stack-panel-blur',
+        style_class: `${variant}-blur`,
         x_expand: true, y_expand: true,
     });
     blur.set_style(`border-radius: ${cornerRadius}px;`);
@@ -48,13 +54,13 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true } = {})
     blur.add_effect(blurEffect);
 
     const tint = new St.Widget({
-        style_class: 'macos-stack-panel-tint',
+        style_class: `${variant}-tint`,
         x_expand: true, y_expand: true,
     });
     tint.set_style(`border-radius: ${cornerRadius}px;`);
 
     const sheen = new St.Widget({
-        style_class: 'macos-stack-panel-sheen',
+        style_class: `${variant}-sheen`,
         x_expand: true, y_expand: false,
         x_align: Clutter.ActorAlign.FILL,
         y_align: Clutter.ActorAlign.START,
@@ -63,43 +69,28 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true } = {})
     sheen.set_style(`border-radius: ${cornerRadius}px ${cornerRadius}px 0 0;`);
 
     const content = new St.Widget({
-        style_class: 'macos-stack-panel-content',
+        style_class: `${variant}-content`,
         layout_manager: new Clutter.BinLayout(),
         x_expand: true, y_expand: true,
     });
 
     const border = new St.Widget({
-        style_class: 'macos-stack-panel-border',
+        style_class: `${variant}-border`,
         x_expand: true, y_expand: true,
     });
     border.set_style(`border-radius: ${cornerRadius}px;`);
-
-    // Soft, pointer-following glare — the panel's material reacting to
-    // the cursor, the way glass/aqua surfaces catch a passing light.
-    // Anchored at the panel's origin with a fixed size (x/y-align START
-    // so BinLayout doesn't stretch it to fill the panel like the other
-    // layers); the caller then moves it with translation_x/y, since
-    // that's a post-allocation transform BinLayout won't override
-    // (plain set_position() would be, on every relayout).
-    const glare = new St.Widget({
-        style_class: 'macos-stack-panel-glare',
-        width: 200, height: 200,
-        x_align: Clutter.ActorAlign.START,
-        y_align: Clutter.ActorAlign.START,
-        opacity: 0,
-        reactive: false,
-    });
-    glare.set_style('border-radius: 100px;');
-    glare.add_effect(new Shell.BlurEffect({ mode: Shell.BlurMode.ACTOR, radius: 40, brightness: 1.0 }));
 
     panel.add_child(blur);
     panel.add_child(tint);
     panel.add_child(sheen);
     panel.add_child(content);
-    panel.add_child(glare);
     panel.add_child(border);
 
-    return { panel, content, blurEffect, glare };
+    // `background` is every purely decorative layer, exposed so a caller
+    // can switch the whole glass surface off and keep only `content` —
+    // the macOS Fan view draws no panel at all, its items float free
+    // over the desktop.
+    return { panel, content, blurEffect, tint, background: [blur, tint, sheen, border] };
 }
 
 export function createShadowActor({ cornerRadius = 18 } = {}) {

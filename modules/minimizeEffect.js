@@ -30,7 +30,7 @@
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-import { animateSpring, SPRING } from './animations.js';
+import { animateSpring, cancelSpring, SPRING } from './animations.js';
 
 const GENIE_DURATION = 320;
 
@@ -41,6 +41,9 @@ export class MinimizeEffectManager {
 
         this._windowCreatedId = 0;
         this._windowSignals = new Map(); // Meta.Window -> { minimizedId, unmanagingId }
+        // Actors we actually applied the genie transform to, so the
+        // restore path knows which ones it is responsible for undoing.
+        this._minimizedActors = new Set();
     }
 
     enable() {
@@ -61,6 +64,17 @@ export class MinimizeEffectManager {
             window.disconnect(ids.unmanagingId);
         }
         this._windowSignals.clear();
+
+        // Anything still carrying our shrink-to-nothing transform gets
+        // it removed here — otherwise disabling the extension while a
+        // window is minimized would leave that window permanently
+        // invisible once restored, since the handler that would have
+        // undone it is exactly what we just disconnected.
+        for (const actor of this._minimizedActors) {
+            cancelSpring(actor);
+            actor.set({ scale_x: 1, scale_y: 1, opacity: 255 });
+        }
+        this._minimizedActors.clear();
     }
 
     _trackWindow(window) {
@@ -69,6 +83,10 @@ export class MinimizeEffectManager {
 
         const minimizedId = window.connect('notify::minimized', () => this._onMinimizedChanged(window));
         const unmanagingId = window.connect('unmanaging', () => {
+            const actor = window.get_compositor_private();
+            if (actor)
+                this._minimizedActors.delete(actor);
+
             const ids = this._windowSignals.get(window);
             if (ids) {
                 window.disconnect(ids.minimizedId);
@@ -80,23 +98,41 @@ export class MinimizeEffectManager {
     }
 
     _onMinimizedChanged(window) {
-        if (this._settings.dockMinimizeEffect !== 'genie')
-            return; // native effect runs unmodified
-
         const actor = window.get_compositor_private();
         if (!actor)
             return;
+
+        // Restoring is handled unconditionally, even when the genie
+        // effect is off or the window has no dock icon. Minimizing
+        // leaves the actor scaled to 5% and fully transparent; if the
+        // matching restore ever bailed out early, nothing would ever
+        // undo that and the window would come back *invisible*, with no
+        // way for the user to recover it short of closing the app.
+        // Reachable for real: unpinning an app (or quitting its last
+        // other window) between minimize and restore makes
+        // getIconGeometryForWindow() return null, and flipping the
+        // minimize-effect preference to "default" does the same — both
+        // used to hit a `return` that skipped the restore entirely.
+        if (!window.minimized) {
+            if (!this._minimizedActors.has(actor))
+                return; // we never touched this one — leave it to GNOME
+            this._minimizedActors.delete(actor);
+
+            Main.wm.skipNextEffect(actor);
+            this._animateGenieIn(actor, window);
+            return;
+        }
+
+        if (this._settings.dockMinimizeEffect !== 'genie')
+            return; // native effect runs unmodified
 
         const geometry = this._dockManager.getIconGeometryForWindow(window);
         if (!geometry)
             return; // no dock icon to swoop toward — let the native effect run
 
         Main.wm.skipNextEffect(actor);
-
-        if (window.minimized)
-            this._animateGenieOut(actor, geometry);
-        else
-            this._animateGenieIn(actor, window);
+        this._minimizedActors.add(actor);
+        this._animateGenieOut(actor, geometry);
     }
 
     _animateGenieOut(actor, geometry) {
@@ -110,12 +146,20 @@ export class MinimizeEffectManager {
     }
 
     _animateGenieIn(actor, window) {
-        const frame = window.get_frame_rect();
+        // get_buffer_rect(), not get_frame_rect(): the window *actor's*
+        // position corresponds to the buffer rect (which includes the
+        // client-side shadow / invisible resize borders GTK apps draw),
+        // while the frame rect is the smaller visible frame inside it.
+        // Restoring to the frame rect therefore left the window offset
+        // by exactly the invisible-border width every time it was
+        // unminimized — a visible jump, worse on apps with large CSD
+        // shadows.
+        const buffer = window.get_buffer_rect();
         actor.set_pivot_point(0.5, 1);
 
         animateSpring(actor,
             { x: actor.x, y: actor.y, scale_x: actor.scale_x, scale_y: actor.scale_y, opacity: actor.opacity },
-            { x: frame.x, y: frame.y, scale_x: 1, scale_y: 1, opacity: 255 },
+            { x: buffer.x, y: buffer.y, scale_x: 1, scale_y: 1, opacity: 255 },
             { duration: GENIE_DURATION, preset: SPRING.PANEL, speed: this._settings.animationSpeed });
     }
 }

@@ -85,6 +85,17 @@ export function animateSpring(target, fromProps, toProps, options = {}) {
         preset = SPRING.PANEL,
         onUpdate = null,
         onComplete = null,
+        // Identifies *which* concurrent animation this is on `target`.
+        // Animations are tracked per-id, so two unrelated concerns can
+        // drive disjoint properties of the same actor at the same time
+        // (a dock icon's launch bounce animates translation_y while
+        // hover magnification animates scale/translation_x — with a
+        // single slot per target, starting either one silently killed
+        // the other mid-flight, which is why a bouncing icon stopped
+        // dead the moment the pointer moved over it). Same id ==
+        // same slot, so re-targeting one concern still cancels only
+        // its own previous animation, as before.
+        id = 'default',
         // A Clutter.Timeline only actually starts if it's bound to either
         // an actor that has a stage, or an explicit frame clock — a bare
         // `new Clutter.Timeline({duration})` has neither, so start() is a
@@ -96,7 +107,7 @@ export function animateSpring(target, fromProps, toProps, options = {}) {
         actor = target,
     } = options;
 
-    cancelSpring(target);
+    cancelSpring(target, id);
 
     const realDuration = Math.max(1, Math.round(duration / Math.max(0.01, speed)));
     const timeline = Clutter.Timeline.new_for_actor(actor, realDuration);
@@ -119,22 +130,41 @@ export function animateSpring(target, fromProps, toProps, options = {}) {
         for (const key of keys)
             applyProp(target, key, toProps[key]);
 
-        if (target._springTimeline === timeline)
-            delete target._springTimeline;
+        if (target._springTimelines?.get(id) === timeline)
+            target._springTimelines.delete(id);
 
         if (onComplete)
             onComplete();
     });
 
-    target._springTimeline = timeline;
+    if (!target._springTimelines)
+        target._springTimelines = new Map();
+    target._springTimelines.set(id, timeline);
     timeline.start();
     return timeline;
 }
 
-export function cancelSpring(target) {
-    if (target && target._springTimeline) {
-        target._springTimeline.stop();
-        delete target._springTimeline;
+/**
+ * Stops in-flight spring animations on `target`. With no `id`, stops
+ * every concurrent animation on it (the teardown case); with an `id`,
+ * stops only that one, leaving unrelated concerns running.
+ */
+export function cancelSpring(target, id = null) {
+    const timelines = target?._springTimelines;
+    if (!timelines)
+        return;
+
+    if (id === null) {
+        for (const timeline of timelines.values())
+            timeline.stop();
+        timelines.clear();
+        return;
+    }
+
+    const timeline = timelines.get(id);
+    if (timeline) {
+        timeline.stop();
+        timelines.delete(id);
     }
 }
 

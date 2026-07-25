@@ -33,7 +33,7 @@ export default class MacosDockStackExtension extends Extension {
             this._stackManager = new StackManager(this._settings);
             this._dockManager = new DockManager(this._settings, (config, iconActor) => {
                 this._stackManager.toggle(config, iconActor);
-            });
+            }, () => this.openPreferences());
             this._dockManager.enable();
 
             this._minimizeEffectManager = new MinimizeEffectManager(this._settings, this._dockManager);

@@ -18,6 +18,14 @@ import { animateSpring, SPRING } from './animations.js';
 
 const BOUNCE_HEIGHT = 14;
 const ATTENTION_BOUNCE_COUNT = 3;
+// macOS bounces a launching app a few times and then stops, even if the
+// app is still starting. Ours looped for as long as the app stayed in
+// Shell.AppState.STARTING, which for a slow starter like Chrome (which
+// sits in STARTING for many seconds) meant an icon that kept hopping
+// long after it stopped being informative — the "fica muito tempo
+// pulando" report. Fast apps leave STARTING quickly, which is why they
+// looked fine and only Chrome stood out.
+const LAUNCH_BOUNCE_COUNT = 3;
 
 export const DockAppIcon = GObject.registerClass(
 class DockAppIcon extends AppDisplay.AppIcon {
@@ -27,6 +35,18 @@ class DockAppIcon extends AppDisplay.AppIcon {
             showLabel: false,
             popupMenuSide: St.Side.TOP,
         });
+
+        // AppIcon's base 'overview-tile' style class carries a 12px
+        // padding on every side (meant for the app-grid, which also
+        // reserves space for a label under the icon). DockFolderIcon and
+        // DockTrashIcon carry no such padding, so at the same icon-size
+        // setting a running app's actual button was 24px taller/wider
+        // than every other dock icon — enough to visibly throw off
+        // vertical centering next to them. This adds a second, more
+        // specific class purely to zero that padding back out for dock
+        // use (see stylesheet.css), without touching the shared
+        // 'overview-tile' rule other GNOME UI still relies on.
+        this.add_style_class_name('macos-dock-app-icon');
 
         this._launchBouncing = false;
 
@@ -47,7 +67,14 @@ class DockAppIcon extends AppDisplay.AppIcon {
         if (this._launchBouncing)
             return;
         this._launchBouncing = true;
-        this._bounceCycle(() => this._launchBouncing);
+
+        // Bounded by a bounce count as well as by the app's state, so a
+        // long-starting app stops hopping on its own.
+        let remaining = LAUNCH_BOUNCE_COUNT;
+        this._bounceCycle(() => {
+            remaining -= 1;
+            return this._launchBouncing && remaining > 0;
+        });
     }
 
     // A handful of bounces, then stop — mirrors macOS's bounded
@@ -61,14 +88,20 @@ class DockAppIcon extends AppDisplay.AppIcon {
         });
     }
 
+    // id: 'bounce' keeps this on its own animation slot. Hover
+    // magnification drives scale_x/scale_y/translation_x on this same
+    // actor, and with a single slot per actor the two silently killed
+    // each other — pointing at a launching app froze its bounce dead,
+    // and the bounce wiped out the magnification. Disjoint properties,
+    // so they compose correctly once they stop sharing a slot.
     _bounceCycle(shouldContinue) {
         if (!this.get_stage())
             return;
         animateSpring(this, { translation_y: 0 }, { translation_y: -BOUNCE_HEIGHT }, {
-            duration: 160, preset: SPRING.ITEM,
+            duration: 160, preset: SPRING.ITEM, id: 'bounce',
             onComplete: () => {
                 animateSpring(this, { translation_y: -BOUNCE_HEIGHT }, { translation_y: 0 }, {
-                    duration: 160, preset: SPRING.ITEM,
+                    duration: 160, preset: SPRING.ITEM, id: 'bounce',
                     onComplete: () => {
                         if (shouldContinue())
                             this._bounceCycle(shouldContinue);

@@ -18,6 +18,11 @@ import { generateStackId } from './modules/utils.js';
 
 const DIRECTION_VALUES = ['auto', 'up', 'down'];
 const MODE_VALUES = ['grid', 'fan', 'stack'];
+const MINIMIZE_EFFECT_VALUES = ['genie', 'default'];
+
+function minimizeEffectLabels() {
+    return [_('Genie (estilo macOS)'), _('Padrão do GNOME Shell')];
+}
 
 // gettext can only be called once the extension is actually running (it
 // resolves the caller against the loaded-extensions registry), so these
@@ -37,7 +42,57 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
 
         window.set_default_size(640, 720);
         window.add(this._buildGeneralPage(gsettings));
+        window.add(this._buildDockPage(gsettings));
         window.add(this._buildStacksPage(window, settings));
+    }
+
+    // -- dock page ---------------------------------------------------
+
+    _buildDockPage(gsettings) {
+        const page = new Adw.PreferencesPage({
+            title: _('Dock'),
+            icon_name: 'view-app-grid-symbolic',
+        });
+
+        const layoutGroup = new Adw.PreferencesGroup({ title: _('Layout') });
+        page.add(layoutGroup);
+        layoutGroup.add(this._spinRow(gsettings, 'dock-icon-size', {
+            title: _('Tamanho dos ícones'),
+            subtitle: _('Tamanho, em pixels, dos ícones na barra da dock'),
+            lower: 36, upper: 96, step: 2, digits: 0,
+        }));
+        layoutGroup.add(this._spinRow(gsettings, 'dock-edge-margin', {
+            title: _('Margem da borda da tela'),
+            lower: 0, upper: 40, step: 1, digits: 0,
+        }));
+        layoutGroup.add(this._switchRow(gsettings, 'dock-autohide', {
+            title: _('Ocultar automaticamente'),
+            subtitle: _('A dock não reserva espaço de tela e se revela ao aproximar o cursor da borda'),
+        }));
+
+        const magnifyGroup = new Adw.PreferencesGroup({ title: _('Magnificação') });
+        page.add(magnifyGroup);
+        magnifyGroup.add(this._switchRow(gsettings, 'dock-magnification-enabled', {
+            title: _('Ampliar ícones ao passar o cursor'),
+        }));
+        magnifyGroup.add(this._spinRow(gsettings, 'dock-magnification-amount', {
+            title: _('Intensidade'),
+            subtitle: _('Fator de escala máximo aplicado ao ícone mais próximo do cursor'),
+            lower: 1.0, upper: 2.5, step: 0.1, digits: 1,
+        }));
+        magnifyGroup.add(this._spinRow(gsettings, 'dock-magnification-range', {
+            title: _('Alcance'),
+            subtitle: _('Raio, em pixels, de influência do cursor sobre os ícones vizinhos'),
+            lower: 40, upper: 400, step: 10, digits: 0,
+        }));
+
+        const minimizeGroup = new Adw.PreferencesGroup({ title: _('Minimizar') });
+        page.add(minimizeGroup);
+        minimizeGroup.add(this._comboRow(gsettings, 'dock-minimize-effect', MINIMIZE_EFFECT_VALUES, minimizeEffectLabels(), {
+            title: _('Efeito ao minimizar janelas'),
+        }));
+
+        return page;
     }
 
     // -- general page --------------------------------------------------

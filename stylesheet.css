@@ -1,37 +1,80 @@
 /* stylesheet.css
  *
- * Visual language for the stack panel: a Finder-like glass surface —
- * rounded corners, translucent tint, a soft top sheen and an inset
- * border/highlight — plus the dash icon and grid item styling.
- * Loaded automatically by GNOME Shell while the extension is enabled.
+ * Visual language for the two glass surfaces this extension draws: the
+ * persistent dock bar and the Finder-style stack panel. They are built
+ * by the same helper (modules/glass.js) but are deliberately styled
+ * through separate class prefixes — they originally shared one set of
+ * rules, which meant restyling the stack panel silently repainted the
+ * whole dock too. Loaded automatically while the extension is enabled.
+ *
+ * Both are tuned for macOS *dark* mode: a dark translucent surface that
+ * lets the real background blur show through, a bright hairline along
+ * the top edge, and a soft inner border. Note the tint layers are
+ * intentionally low-alpha — the blur behind them is the whole point,
+ * and an opaque fill would flatten it into a plain grey slab.
  */
 
+/* -- stack panel -------------------------------------------------- */
+
 .macos-stack-panel {
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .macos-stack-panel-tint {
   background-gradient-direction: vertical;
-  background-gradient-start: rgba(54, 54, 58, 0.55);
-  background-gradient-end: rgba(26, 26, 30, 0.78);
+  background-gradient-start: rgba(58, 58, 64, 0.42);
+  background-gradient-end: rgba(28, 28, 32, 0.52);
 }
 
 .macos-stack-panel-sheen {
   background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0.18);
+  background-gradient-start: rgba(255, 255, 255, 0.14);
   background-gradient-end: rgba(255, 255, 255, 0);
 }
 
 .macos-stack-panel-border {
   border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset;
-}
-
-.macos-stack-panel-glare {
-  background-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.20) inset;
 }
 
 .macos-stack-panel-content {
+  padding: 0;
+}
+
+/* The pointer tying the stack panel back to its dock icon. Only the two
+ * lower edges of this square are ever visible (see stack.js: it's
+ * rotated 45° inside a half-height clip), so the border reads as the
+ * triangle's own outline. The background colour is overridden at
+ * runtime to track the panel's opacity setting. */
+.macos-stack-arrow {
+  background-color: rgba(28, 28, 32, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* -- dock bar ------------------------------------------------------ */
+
+.macos-dock-panel {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.macos-dock-panel-tint {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(62, 62, 68, 0.40);
+  background-gradient-end: rgba(24, 24, 28, 0.55);
+}
+
+.macos-dock-panel-sheen {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.16);
+  background-gradient-end: rgba(255, 255, 255, 0);
+}
+
+.macos-dock-panel-border {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset;
+}
+
+.macos-dock-panel-content {
   padding: 0;
 }
 
@@ -72,7 +115,8 @@
 .macos-stack-item-label {
   font-size: 11px;
   text-align: center;
-  color: rgba(255, 255, 255, 0.92);
+  color: rgba(255, 255, 255, 0.94);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
 .macos-stack-dash-icon {
@@ -102,11 +146,72 @@
 }
 
 .macos-dock-trash-icon,
-.macos-dock-folder-icon {
+.macos-dock-folder-icon,
+.macos-dock-show-apps-icon {
   border-radius: 10px;
 }
 
 .macos-dock-trash-icon:hover,
-.macos-dock-folder-icon:hover {
+.macos-dock-folder-icon:hover,
+.macos-dock-show-apps-icon:hover {
   background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Neutralizes the 12px padding 'overview-tile' (GNOME's own app-grid
+ * tile class, reused by AppDisplay.AppIcon) carries by default — see
+ * dockAppIcon.js for why that padding threw off vertical alignment
+ * next to the trash/folder/show-apps icons, none of which use it. */
+.macos-dock-app-icon.overview-tile {
+  padding: 0;
+  border-radius: 10px;
+}
+
+.macos-dock-app-icon.overview-tile:hover,
+.macos-dock-app-icon.overview-tile:focus {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.macos-dock-app-icon.overview-tile:active {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* The floating name label shown above whichever icon the pointer is
+ * over, mirroring the macOS Dock's own tooltip. */
+.macos-dock-tooltip {
+  background-color: rgba(28, 28, 32, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.95);
+  text-align: center;
+  box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* macOS' List stack view: one compact row per file — small icon, then
+ * the name beside it on a single line. Replaces the old cascading pile
+ * of rotated tiles, which corresponded to no real Finder view. */
+.macos-stack-row {
+  border-radius: 6px;
+  background-color: transparent;
+  transition-duration: 100ms;
+}
+
+.macos-stack-row:hover,
+.macos-stack-row:focus {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.macos-stack-row:active {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+
+.macos-stack-row-box {
+  spacing: 8px;
+  padding: 0 8px;
+}
+
+.macos-stack-row-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.94);
 }
