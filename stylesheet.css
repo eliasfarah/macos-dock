@@ -215,3 +215,44 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.94);
 }
+
+/* macOS' Fan view. There is no panel behind these — the rows float over
+ * the desktop — so each name gets its own dark plate for legibility
+ * against whatever wallpaper is underneath, and the icons carry a drop
+ * shadow of their own. */
+.macos-stack-fan-item {
+  background-color: transparent;
+}
+
+.macos-stack-fan-box {
+  spacing: 10px;
+  padding: 0 4px;
+}
+
+.macos-stack-fan-label {
+  background-color: rgba(38, 38, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 7px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.45);
+}
+
+.macos-stack-fan-item:hover .macos-stack-fan-label,
+.macos-stack-fan-item:focus .macos-stack-fan-label {
+  background-color: rgba(58, 58, 64, 0.96);
+}
+
+/* The circular "open the folder itself" badge that caps the fan. */
+.macos-stack-fan-finder {
+  background-color: rgba(58, 58, 64, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 28px;
+  color: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.45);
+}
+
+.macos-stack-fan-item:hover .macos-stack-fan-finder {
+  background-color: rgba(78, 78, 86, 0.96);
+}

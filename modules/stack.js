@@ -30,6 +30,17 @@ const ITEM_ICON_SIZE = 48;
 const LIST_ROW_HEIGHT = 26;
 const LIST_ICON_SIZE = 18;
 const LIST_MARGIN = 8;
+// Fan view. Unlike Grid and List this draws NO glass panel at all — in
+// macOS the items simply float over the desktop, rising from the dock
+// icon along a gentle arc, each one a large icon with its name in a
+// dark rounded plate to its left. Ours used to lay the same items out
+// *inside* the glass rectangle, which is why it never read as the real
+// thing.
+const FAN_ICON_SIZE = 56;
+const FAN_ROW_HEIGHT = 74; // vertical distance between consecutive items
+const FAN_ARC = 22; // how far the column drifts sideways from bottom to top
+const FAN_MAX_ROTATION = 3; // degrees, at the top of the arc
+const FAN_MARGIN = 10;
 const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
 const ARROW_SQUARE = 16; // side of the square that, rotated 45°, forms the pointer
@@ -93,7 +104,13 @@ export class Stack {
                 return;
             }
 
+            // Resolved once per open and reused by every step below, so
+            // the item actors, the panel geometry and the layout can
+            // never disagree about which view is being drawn.
+            this._mode = this._resolveMode(entries.length);
+
             this.createStack();
+            this._applyChromeForMode();
             this._applyPanelStyle();
             this._syncItems(entries);
 
@@ -159,7 +176,7 @@ export class Stack {
             return;
         }
 
-        const timeoutIds = animateStagger(this._items, actor => ({
+        const timeoutIds = animateStagger(this._animatedActors(), actor => ({
             from: { opacity: actor.opacity, scale_x: actor.scale_x, scale_y: actor.scale_y, translation_y: actor.translation_y },
             to: { opacity: 0, scale_x: 0.85, scale_y: 0.85, translation_y: 8 },
         }), {
@@ -178,6 +195,23 @@ export class Stack {
 
     // -- geometry --------------------------------------------------------
 
+    /**
+     * The view actually drawn. Fan degrades to Grid once a folder holds
+     * more items than can fan up the screen — macOS does the same rather
+     * than running the column off the top edge.
+     */
+    _resolveMode(entryCount) {
+        const mode = this._settings.displayMode;
+        if (mode !== 'fan')
+            return mode;
+
+        const monitorIndex = Main.layoutManager.findIndexForActor(this._iconActor);
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
+        // +1 for the "Open in Finder" row that caps the fan.
+        const rowsThatFit = Math.floor((workArea.height - ICON_GAP - FAN_MARGIN * 2) / FAN_ROW_HEIGHT) - 1;
+        return entryCount > Math.max(1, rowsThatFit) ? 'grid' : 'fan';
+    }
+
     calculateOrigin(iconActor) {
         const [x, y] = iconActor.get_transformed_position();
         const [width, height] = iconActor.get_transformed_size();
@@ -193,7 +227,7 @@ export class Stack {
         const monitorIndex = Main.layoutManager.findIndexForActor(this._iconActor);
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
 
-        const mode = this._settings.displayMode;
+        const mode = this._mode;
         const columns = clamp(this._settings.gridColumns, 2, 8);
 
         // In grid mode the panel is sized to its *contents*, the way a
@@ -218,8 +252,8 @@ export class Stack {
             width = clamp(gridWidth, ITEM_WIDTH + PANEL_MARGIN * 2, workArea.width - PANEL_MARGIN * 2);
         else if (mode === 'stack') // list
             width = clamp(this._settings.panelSize, 180, workArea.width - PANEL_MARGIN * 2);
-        else
-            width = clamp(this._settings.panelSize, 240, workArea.width - PANEL_MARGIN * 2);
+        else // fan — wide enough for a name plate plus its icon
+            width = clamp(this._settings.panelSize, 260, workArea.width - PANEL_MARGIN * 2);
 
         let height;
         let contentHeight;
@@ -236,11 +270,13 @@ export class Stack {
             contentHeight = Math.max(1, this._entries.length) * LIST_ROW_HEIGHT + LIST_MARGIN * 2;
             height = clamp(contentHeight, LIST_ROW_HEIGHT + LIST_MARGIN * 2, workArea.height - PANEL_MARGIN * 2);
         } else {
-            // Fan wants open space to spread items into, so it uses a
-            // squarer area rather than growing with rows, and doesn't
-            // scroll — items are deliberately laid out to fit.
-            height = clamp(width * 0.72, 200, workArea.height - PANEL_MARGIN * 2);
-            contentHeight = height;
+            // Fan: an invisible container just big enough to hold the
+            // arc, one row per item plus the "Open in Finder" cap. It
+            // never scrolls — _resolveMode() has already switched to Grid
+            // if the column wouldn't fit on screen.
+            const rows = this._entries.length + 1;
+            contentHeight = rows * FAN_ROW_HEIGHT + FAN_MARGIN * 2;
+            height = Math.min(contentHeight, workArea.height - PANEL_MARGIN);
         }
 
         let x = clamp(origin.x - width / 2, workArea.x + PANEL_MARGIN, workArea.x + workArea.width - width - PANEL_MARGIN);
@@ -295,10 +331,11 @@ export class Stack {
         // clipped by its own St.ScrollView viewport, and every
         // background layer carries its own border-radius, so the panel's
         // clip was never what kept those in shape.
-        const { panel, content, blurEffect, tint } = createGlassPanel({
+        const { panel, content, blurEffect, tint, background } = createGlassPanel({
             cornerRadius: CORNER_RADIUS,
             clipContent: false,
         });
+        this._background = background;
         this._panel = panel;
         this._content = content;
         this._blurEffect = blurEffect;
@@ -329,7 +366,18 @@ export class Stack {
         // layout would fight, but Clutter.FixedLayout (which honors
         // manually-set positions) works the same on any St.Widget
         // subclass regardless of which one it is.
-        this._gridWidget = new St.BoxLayout({
+        // St.Viewport, not St.BoxLayout. Both implement St.Scrollable
+        // (which St.ScrollView.set_child() demands, and which a plain
+        // St.Widget fails), but St.BoxLayout carries its own box layout
+        // and quietly ignores an assigned layout_manager — so every
+        // set_position() call in _layoutGrid/_layoutList/_layoutFan was
+        // discarded and the items were simply packed left-to-right in a
+        // single row, whatever view was selected. Confirmed live: four
+        // items reported x=0/460/920/1380 with y=0 across the board.
+        // That is why an opened stack never resembled macOS in any mode.
+        // St.Viewport is what GNOME's own IconGrid extends for exactly
+        // this reason: scrollable *and* it honours its layout manager.
+        this._gridWidget = new St.Viewport({
             style_class: 'macos-stack-grid',
             layout_manager: new Clutter.FixedLayout(),
         });
@@ -345,6 +393,9 @@ export class Stack {
         content.add_child(this._scrollView);
 
         this._createArrow();
+
+        this._finderButton = this._createFinderButton();
+        this._gridWidget.add_child(this._finderButton);
 
         this._panel.set({ scale_x: 0.05, scale_y: 0.05, opacity: 0 });
 
@@ -463,7 +514,7 @@ export class Stack {
         // and reposition — otherwise a stack reopened in List mode would
         // still be holding grid tiles (icon above, centred caption) laid
         // out on list coordinates.
-        const mode = this._settings.displayMode;
+        const mode = this._mode;
         if (this._itemsMode !== mode) {
             for (const item of this._items) {
                 cancelSpring(item);
@@ -512,9 +563,11 @@ export class Stack {
     }
 
     _createItemActor(entry) {
-        return this._settings.displayMode === 'stack'
-            ? this._createListRowActor(entry)
-            : this._createTileActor(entry);
+        if (this._mode === 'stack')
+            return this._createListRowActor(entry);
+        if (this._mode === 'fan')
+            return this._createFanRowActor(entry);
+        return this._createTileActor(entry);
     }
 
     /** One row of the List view: small icon, then the name beside it. */
@@ -554,6 +607,101 @@ export class Stack {
         button.set_child(box);
         button.connect('clicked', () => {
             launchUri(entry.uri);
+            this.closeStack();
+        });
+        return button;
+    }
+
+    /**
+     * One item of the Fan: a dark name plate, then a large icon to its
+     * right, the pair pushed against the row's right edge so every icon
+     * lines up in a column while the plates trail off to the left at
+     * whatever width their text needs.
+     */
+    _createFanRowActor(entry) {
+        const button = new St.Button({
+            style_class: 'macos-stack-fan-item',
+            can_focus: true,
+            reactive: true,
+            height: FAN_ROW_HEIGHT,
+        });
+        button._entryUri = entry.uri;
+
+        const box = new St.BoxLayout({
+            vertical: false,
+            style_class: 'macos-stack-fan-box',
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true, y_expand: true,
+        });
+
+        const label = new St.Label({
+            text: entry.name,
+            style_class: 'macos-stack-fan-label',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        label.clutter_text.set_line_wrap(false);
+        label.clutter_text.set_ellipsize(Pango.EllipsizeMode.MIDDLE);
+        box.add_child(label);
+
+        box.add_child(new St.Icon({
+            gicon: this._iconForEntry(entry),
+            icon_size: FAN_ICON_SIZE,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+
+        button.set_child(box);
+        button.connect('clicked', () => {
+            launchUri(entry.uri);
+            this.closeStack();
+        });
+        return button;
+    }
+
+    /** The "Open in Finder" cap that tops off a macOS fan. */
+    _createFinderButton() {
+        const button = new St.Button({
+            style_class: 'macos-stack-fan-item',
+            can_focus: true,
+            reactive: true,
+            height: FAN_ROW_HEIGHT,
+        });
+
+        const box = new St.BoxLayout({
+            vertical: false,
+            style_class: 'macos-stack-fan-box',
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true, y_expand: true,
+        });
+
+        const label = new St.Label({
+            text: 'Abrir no Gerenciador de Arquivos',
+            style_class: 'macos-stack-fan-label',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        label.clutter_text.set_line_wrap(false);
+        label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+        box.add_child(label);
+
+        // The circular badge macOS uses for this row, rather than the
+        // folder's own icon.
+        const badge = new St.Bin({
+            style_class: 'macos-stack-fan-finder',
+            width: FAN_ICON_SIZE,
+            height: FAN_ICON_SIZE,
+        });
+        badge.set_child(new St.Icon({
+            icon_name: 'go-next-symbolic',
+            icon_size: Math.round(FAN_ICON_SIZE / 2),
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        box.add_child(badge);
+
+        button.set_child(box);
+        button.connect('clicked', () => {
+            launchUri(Gio.File.new_for_path(this.config.path).get_uri());
             this.closeStack();
         });
         return button;
@@ -613,7 +761,7 @@ export class Stack {
     // -- layout (grid / fan / stack) ---------------------------------------
 
     _layoutItems(geometry) {
-        const mode = this._settings.displayMode;
+        const mode = this._mode;
         if (mode === 'fan')
             this._layoutFan(geometry);
         else if (mode === 'stack')
@@ -646,21 +794,51 @@ export class Stack {
         });
     }
 
+    /**
+     * Items stack upward from the dock icon, the column drifting
+     * sideways and tilting a little more the higher it climbs, with the
+     * "Open in Finder" row on top. Rows are full width with their
+     * contents right-aligned, so shifting a row along the arc carries
+     * its icon and name plate together.
+     */
     _layoutFan(geometry) {
-        const centerX = geometry.width / 2;
-        const baseY = geometry.height - ITEM_HEIGHT / 2 - PANEL_MARGIN;
-        const radius = Math.min(geometry.width, geometry.height * 1.6) / 2 - ITEM_WIDTH / 2;
-        const count = this._items.length;
-        const spread = Math.min(Math.PI * 0.8, 0.22 * count + 0.2);
+        const rows = [...this._items];
+        if (this._finderButton)
+            rows.push(this._finderButton);
 
-        this._items.forEach((item, index) => {
-            const t = count === 1 ? 0.5 : index / (count - 1);
-            const angle = -spread / 2 + t * spread;
-            const x = centerX + radius * Math.sin(angle) - ITEM_WIDTH / 2;
-            const y = baseY - radius * Math.cos(angle) * 0.9 - ITEM_HEIGHT / 2;
-            item.set_position(x, y);
-            item.rotation_angle_z = (angle * 180) / Math.PI;
+        const lastIndex = Math.max(1, rows.length - 1);
+        rows.forEach((row, index) => {
+            const t = index / lastIndex; // 0 at the dock, 1 at the top
+            row.set_size(geometry.width, FAN_ROW_HEIGHT);
+            row.set_position(
+                Math.round(FAN_ARC * Math.sin(t * Math.PI / 2)),
+                Math.round(geometry.height - FAN_MARGIN - (index + 1) * FAN_ROW_HEIGHT));
+            row.set_pivot_point(1, 0.5); // rotate about the icon end
+            row.rotation_angle_z = -FAN_MAX_ROTATION * t;
         });
+    }
+
+    /**
+     * The Fan draws no panel: macOS shows its items floating over the
+     * desktop with nothing behind them. Every decorative layer, the
+     * pointer and the drop shadow are switched off for it, leaving the
+     * panel as a bare, invisible container for the rows.
+     */
+    _applyChromeForMode() {
+        const bare = this._mode === 'fan';
+        for (const layer of this._background ?? [])
+            layer.visible = !bare;
+        if (this._arrow)
+            this._arrow.visible = !bare;
+        if (this._shadow)
+            this._shadow.visible = !bare;
+
+        // The fan is taller than its rows strictly need and must not be
+        // clipped to a viewport; grid/list keep their scrolling one.
+        this._scrollView.vscrollbar_policy = bare ? St.PolicyType.NEVER : St.PolicyType.AUTOMATIC;
+
+        if (this._finderButton)
+            this._finderButton.visible = bare;
     }
 
     // -- animation -----------------------------------------------------
@@ -684,21 +862,28 @@ export class Stack {
     }
 
     animateShadow() {
-        if (!this._settings.shadowEnabled)
+        if (!this._settings.shadowEnabled || this._mode === 'fan')
             return;
         const speed = this._settings.animationSpeed;
         animateSpring(this._shadow, { opacity: 0 }, { opacity: 200 },
             { duration: 520, speed, preset: SPRING.SOFT });
     }
 
+    /** Items plus, in fan mode, the "Open in Finder" cap. */
+    _animatedActors() {
+        return this._mode === 'fan' && this._finderButton
+            ? [...this._items, this._finderButton]
+            : this._items;
+    }
+
     animateItems() {
         const speed = this._settings.animationSpeed;
         const delay = this._settings.staggerDelay;
 
-        for (const item of this._items)
+        for (const item of this._animatedActors())
             item.set({ opacity: 0, scale_x: 0.85, scale_y: 0.85, translation_y: 12 });
 
-        const timeoutIds = animateStagger(this._items, () => ({
+        const timeoutIds = animateStagger(this._animatedActors(), () => ({
             from: { opacity: 0, scale_x: 0.85, scale_y: 0.85, translation_y: 12 },
             to: { opacity: 255, scale_x: 1, scale_y: 1, translation_y: 0 },
         }), { baseDelay: delay, duration: 260, speed, preset: SPRING.ITEM });
@@ -772,6 +957,8 @@ export class Stack {
         this._tint = null;
         this._arrow = null;
         this._arrowSquare = null;
+        this._background = null;
+        this._finderButton = null;
         this._scrollView = null;
         this._gridWidget = null;
         this._items = [];
