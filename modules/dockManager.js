@@ -72,6 +72,9 @@ const AUTOHIDE_TRIGGER_HEIGHT = 2; // reveal band pinned to the screen edge
 const UNPIN_DROP_MARGIN = 60; // how far past the dock a drop must land to unpin
 const AUTOHIDE_DELAY = 350; // ms the pointer must stay away before re-hiding
 const TOOLTIP_GAP = 10; // gap between an icon's top and its tooltip
+// How many app ids the recents queue remembers on disk, independently of
+// how many the preference currently displays — see _recordRecentApps().
+const RECENT_APPS_MEMORY = 12;
 
 export class DockManager {
     constructor(settings, onActivateFolder, onOpenPreferences) {
@@ -899,6 +902,9 @@ export class DockManager {
         case 'appearance':
             this._appearance?.refresh();
             break;
+        case 'dock-recent-apps':
+            this._queueRedisplay();
+            break;
         case 'dock-autohide':
             this._updateStrutTracking();
             this._updateAutohide();
@@ -947,17 +953,85 @@ export class DockManager {
         this._publishIconGeometries();
     }
 
+    /**
+     * The "recently opened" section macOS keeps to the right of the
+     * pinned apps: an app you launched but never pinned stays on the Dock
+     * after you quit it, and the three most recent ones are kept.
+     *
+     * The list is a most-recently-used queue of app ids, persisted through
+     * GSettings so it survives a logout the way the Dock's does. It is
+     * updated on every app-state change rather than only on launch,
+     * because re-focusing an already-running app should refresh its place
+     * in the queue too. Pinned apps are never recorded: they have their
+     * own section, and letting them into this one would duplicate them.
+     */
+    _recordRecentApps() {
+        if (this._settings.dockRecentApps === 0)
+            return;
+
+        const favouriteIds = new Set(this._favorites.getFavorites().map(app => app.get_id()));
+        const running = this._appSystem.get_running()
+            .map(app => app.get_id())
+            .filter(id => !favouriteIds.has(id));
+        if (running.length === 0)
+            return;
+
+        // Running apps go to the front, keeping their relative order, and
+        // the rest of the queue follows with duplicates dropped.
+        const merged = [...running];
+        for (const id of this._settings.getRecentApps()) {
+            if (!merged.includes(id) && !favouriteIds.has(id))
+                merged.push(id);
+        }
+
+        // Trimmed generously rather than to the exact preference: lowering
+        // the preference should not permanently forget apps that raising it
+        // again would have shown.
+        const trimmed = merged.slice(0, RECENT_APPS_MEMORY);
+        const stored = this._settings.getRecentApps();
+        if (trimmed.length !== stored.length || trimmed.some((id, i) => id !== stored[i]))
+            this._settings.setRecentApps(trimmed);
+    }
+
+    /** Recently-used, currently-closed apps still worth a dock icon. */
+    _recentApps(favouriteIds, runningIds) {
+        const limit = this._settings.dockRecentApps;
+        if (limit === 0)
+            return [];
+
+        const apps = [];
+        for (const id of this._settings.getRecentApps()) {
+            if (apps.length >= limit)
+                break;
+            if (favouriteIds.has(id) || runningIds.has(id))
+                continue;
+            // An app can be uninstalled between one login and the next, in
+            // which case lookup_app returns null and the id is simply
+            // skipped — it drops out of the queue on the next write.
+            const app = this._appSystem.lookup_app(id);
+            if (app)
+                apps.push(app);
+        }
+        return apps;
+    }
+
     _redisplayApps() {
         // Favorites first (in their configured order), then running-but-
         // unfavorited apps appended — and existing icons are repositioned
         // rather than rebuilt, so apps already on the dock never visibly
         // jump around when an unrelated app launches or quits.
+        this._recordRecentApps();
+
         const favoriteApps = this._favorites.getFavorites();
         const favoriteIds = new Set(favoriteApps.map(app => app.get_id()));
         const runningApps = this._appSystem.get_running()
             .filter(app => !favoriteIds.has(app.get_id()));
+        const runningIds = new Set(runningApps.map(app => app.get_id()));
+        // Closed, but recent enough that macOS would still show them.
+        const recentApps = this._recentApps(favoriteIds, runningIds);
+        const trailingApps = [...runningApps, ...recentApps];
 
-        const wantedIds = new Set([...favoriteIds, ...runningApps.map(app => app.get_id())]);
+        const wantedIds = new Set([...favoriteIds, ...trailingApps.map(app => app.get_id())]);
         for (const [appId, icon] of this._appIcons) {
             if (!wantedIds.has(appId)) {
                 icon.destroy();
@@ -991,11 +1065,11 @@ export class DockManager {
             this._appsBox.set_child_at_index(iconFor(app), index++);
 
         if (this._sepRunning) {
-            this._sepRunning.visible = favoriteApps.length > 0 && runningApps.length > 0;
+            this._sepRunning.visible = favoriteApps.length > 0 && trailingApps.length > 0;
             this._appsBox.set_child_at_index(this._sepRunning, index++);
         }
 
-        for (const app of runningApps)
+        for (const app of trailingApps)
             this._appsBox.set_child_at_index(iconFor(app), index++);
     }
 

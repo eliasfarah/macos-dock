@@ -20,7 +20,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 
-import { listDirectory, iconForEntry } from './utils.js';
+import { listDirectory, iconForEntry, clamp } from './utils.js';
 
 // Back-to-front, so a plain add_child() loop already paints in the right
 // order. `scale` is a fraction of the dock's icon size; `dx`/`dy` offset
@@ -53,8 +53,12 @@ const PROGRESS_STALL_POLLS = 12;
 // Fraction of the icon's width/height the progress bar occupies.
 const PROGRESS_WIDTH_RATIO = 0.86;
 const PROGRESS_HEIGHT_RATIO = 0.13;
-// One indeterminate sweep, in milliseconds.
-const PROGRESS_SWEEP_MS = 1400;
+// The activity sweep's slowest and fastest periods, in milliseconds, and
+// the byte rate at which it reaches roughly half of the slow one. Tuned so
+// a few hundred KB/s is visibly slower than a few MB/s.
+const PROGRESS_SWEEP_MS = 2200;
+const PROGRESS_SWEEP_MIN_MS = 450;
+const SWEEP_RATE_SCALE = 1.5 * 1024 * 1024;
 
 export const DockFolderIcon = GObject.registerClass(
 class DockFolderIcon extends St.Button {
@@ -113,9 +117,13 @@ class DockFolderIcon extends St.Button {
         this._progressTrack.add_child(this._progressFill);
         this._preview.add_child(this._progressTrack);
 
-        this._download = null; // { path, size, seen, stalled }
+        // path -> { size, allocated, quiet, rate, at, hasTotal }. A Map so
+        // several transfers into the same folder are all tracked at once,
+        // and so a running one keeps its measured rate across refreshes.
+        this._downloads = new Map();
         this._progressId = 0;
-        this._sweepStart = 0;
+        this._pollGeneration = 0;
+        this._sweepDuration = 0;
 
         this.set_child(this._preview);
         this._rebuild();
@@ -256,19 +264,36 @@ class DockFolderIcon extends St.Button {
     // -- download progress ----------------------------------------------
     //
     // macOS shows a progress bar on a Dock stack while something is being
-    // written into that folder. There is no desktop-wide API that reports
-    // "this download is 40% done" — browsers don't publish it — so this
-    // works off the artefact they all leave on disk instead: the partial
-    // file (`.part`, `.crdownload`, …) they write to and rename on
-    // completion. Its presence is the signal that a download is running,
-    // and its growth is the signal that it is still alive.
+    // written into that folder, and it shows a real percentage because
+    // Safari hands the Dock the total. Nothing on this desktop does that,
+    // so this works off the artefact every downloader leaves on disk: the
+    // partial file (`.part`, `.crdownload`, …) it writes to and renames on
+    // completion. Several at once are tracked and aggregated — a Downloads
+    // folder with three transfers running shows one bar covering all three,
+    // the way a single Dock stack has to.
     //
-    // A *fraction* is only shown when one can honestly be computed: when
-    // the partial file is sparse — its allocated blocks add up to less than
-    // its apparent size, which is what preallocating the final size looks
-    // like on disk — the ratio between the two is real progress. Otherwise
-    // the total is genuinely unknowable and the bar sweeps instead of
-    // filling, which says "working" without inventing a number.
+    // How much of that can be a *percentage* was settled by measuring, not
+    // by assuming. A live Chrome download samples 67MB, 101MB, 137MB,
+    // 171MB with `size == allocated` at every step: the file simply grows,
+    // nothing is preallocated, and the final size appears nowhere on disk.
+    // Chrome's own History database only gets the row *after* the download
+    // completes (state=1, total == received) — during the transfer the
+    // downloads table is empty — so even reading his browsing history,
+    // which would be a nasty thing for a dock to do, would not answer it.
+    //
+    // So there are two honest states, and both reflect something real:
+    //
+    //   * A total is derivable — the partial file is sparse, i.e. its
+    //     allocated blocks fall short of its apparent size, which is what
+    //     reserving the final size up front looks like on disk. Torrent
+    //     clients, aria2 and `curl -C` all do this. The bar then fills to
+    //     the true fraction, summed across every download in the folder.
+    //
+    //   * No total exists anywhere (browsers). The bar sweeps — but the
+    //     sweep is driven by the *measured byte rate*, so it accelerates
+    //     with a fast transfer and freezes outright when the transfer
+    //     stalls. It is an activity indicator, which is the honest widget
+    //     for an unknown total, but it is not the content-free loop it was.
 
     _layoutProgress() {
         if (!this._progressTrack)
@@ -282,18 +307,27 @@ class DockFolderIcon extends St.Button {
         this._progressFill.set_height(Math.max(1, height - 2));
     }
 
+    /**
+     * Reconciles the tracked transfers with what is actually in the folder.
+     * Keyed by path so a download that is already being measured keeps its
+     * history (and therefore its rate) across a folder refresh.
+     */
     _syncDownloadState() {
-        const partial = this._entries.find(entry => entry.partial);
-        if (!partial) {
-            this._stopProgress();
-            return;
+        const partials = new Set(this._entries.filter(e => e.partial).map(e => e.path));
+
+        for (const path of [...this._downloads.keys()]) {
+            if (!partials.has(path))
+                this._downloads.delete(path);
+        }
+        for (const path of partials) {
+            if (!this._downloads.has(path))
+                this._downloads.set(path, { size: -1, allocated: -1, quiet: 0, rate: 0, at: 0 });
         }
 
-        if (this._download?.path !== partial.path) {
-            this._download = { path: partial.path, size: -1, allocated: -1, quiet: 0 };
-            this._sweepStart = GLib.get_monotonic_time() / 1000;
-        }
-        this._startProgress();
+        if (this._downloads.size === 0)
+            this._stopProgress();
+        else
+            this._startProgress();
     }
 
     _startProgress() {
@@ -312,102 +346,175 @@ class DockFolderIcon extends St.Button {
             GLib.Source.remove(this._progressId);
             this._progressId = 0;
         }
-        this._download = null;
+        this._downloads.clear();
+        this._stopSweep();
         this._progressTrack?.hide();
     }
 
     _pollProgress() {
-        const download = this._download;
-        if (!download || !this.get_stage()) {
+        if (this._downloads.size === 0 || !this.get_stage()) {
             this._stopProgress();
             return;
         }
 
-        const file = Gio.File.new_for_path(download.path);
-        file.query_info_async('standard::size,unix::blocks',
-            Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (source, result) => {
-                if (this._download !== download)
-                    return; // superseded by a newer download while in flight
+        // One query per transfer, all in flight together; the draw happens
+        // once, when the last of them has answered, so a folder with three
+        // downloads still repaints the bar exactly once per tick.
+        let outstanding = this._downloads.size;
+        const generation = ++this._pollGeneration;
+        const done = () => {
+            if (--outstanding === 0 && generation === this._pollGeneration)
+                this._drawProgress();
+        };
 
-                let info;
-                try {
-                    info = source.query_info_finish(result);
-                } catch (error) {
-                    // Gone — either finished and renamed, or cancelled.
-                    // Either way the folder monitor is about to re-list.
-                    this._stopProgress();
-                    return;
-                }
-
-                const size = info.get_size();
-                // st_blocks is defined by POSIX in fixed 512-byte units,
-                // whatever the filesystem's own block size is.
-                // `unix::block-size` is st_blksize — the *preferred I/O
-                // size* (4096 here), a different quantity entirely, and
-                // multiplying by it reported a 100MB file as having 160MB
-                // allocated, which made every download look non-sparse and
-                // fall back to the indeterminate sweep. Measured: 40960
-                // blocks x 512 = exactly the 20MB actually written.
-                const allocated = info.get_attribute_uint64('unix::blocks') * 512;
-
-                if (size === download.size && allocated === download.allocated) {
-                    download.quiet += 1;
-                    if (download.quiet >= PROGRESS_STALL_POLLS) {
-                        this._stopProgress();
+        for (const [path, state] of this._downloads) {
+            Gio.File.new_for_path(path).query_info_async(
+                'standard::size,unix::blocks',
+                Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null,
+                (source, result) => {
+                    let info = null;
+                    try {
+                        info = source.query_info_finish(result);
+                    } catch (error) {
+                        // Gone — finished and renamed, or cancelled. The
+                        // folder monitor is about to re-list either way.
+                        this._downloads.delete(path);
+                        done();
                         return;
                     }
-                } else {
-                    download.quiet = 0;
-                }
-                download.size = size;
-                download.allocated = allocated;
-
-                // Sparse by a clear margin means the final size was
-                // reserved up front and only part of it is written yet.
-                // The 8KiB slack keeps filesystem bookkeeping (a tail
-                // block, inline extents) from reading as "nearly empty".
-                const fraction = size > 0 && allocated + 8192 < size
-                    ? allocated / size
-                    : -1;
-                this._drawProgress(fraction);
-            });
+                    this._measure(state, info);
+                    if (state.quiet >= PROGRESS_STALL_POLLS)
+                        this._downloads.delete(path);
+                    done();
+                });
+        }
     }
 
-    _drawProgress(fraction) {
-        const inner = Math.max(1, this._progressTrack.width - 2);
-        if (fraction >= 0) {
-            this._stopSweep();
-            this._progressFill.set_x(1);
-            this._progressFill.set_width(Math.max(1, Math.round(inner * fraction)));
+    /** Folds one stat result into a transfer's running state. */
+    _measure(state, info) {
+        const size = info.get_size();
+        // st_blocks is defined by POSIX in fixed 512-byte units, whatever
+        // the filesystem's own block size is. `unix::block-size` is
+        // st_blksize — the *preferred I/O size* (4096 here), a different
+        // quantity entirely, and multiplying by it reported a 100MB file as
+        // having 160MB allocated, which made every download look non-sparse.
+        // Measured: 40960 blocks x 512 = exactly the 20MB actually written.
+        const allocated = info.get_attribute_uint64('unix::blocks') * 512;
+        const now = GLib.get_monotonic_time() / 1000;
+
+        // Progress is whichever of the two actually moved: a growing file
+        // reports it through its size, a preallocated one through its
+        // allocation.
+        const written = Math.max(size === -1 ? 0 : size, allocated);
+        const previous = Math.max(state.size, state.allocated);
+
+        if (state.at > 0 && written > previous)
+            state.rate = ((written - previous) * 1000) / Math.max(1, now - state.at);
+
+        if (size === state.size && allocated === state.allocated) {
+            state.quiet += 1;
+            state.rate = 0;
+        } else {
+            state.quiet = 0;
+        }
+
+        state.size = size;
+        state.allocated = allocated;
+        state.at = now;
+        // A total is only real when the file is sparse by a clear margin:
+        // the final size was reserved and only part of it is written yet.
+        // The 8KiB slack keeps filesystem bookkeeping (a tail block, inline
+        // extents) from reading as "nearly empty".
+        state.hasTotal = size > 0 && allocated + 8192 < size;
+    }
+
+    _drawProgress() {
+        if (this._downloads.size === 0) {
+            this._stopProgress();
             return;
         }
-        this._startSweep();
+
+        let total = 0;
+        let written = 0;
+        let rate = 0;
+        let everyTotalKnown = true;
+        for (const state of this._downloads.values()) {
+            rate += state.rate;
+            if (state.hasTotal) {
+                total += state.size;
+                written += state.allocated;
+            } else {
+                everyTotalKnown = false;
+            }
+        }
+
+        const inner = Math.max(1, this._progressTrack.width - 2);
+        // Partial knowledge is not shown as a fraction: a bar reading 40%
+        // while a second, unmeasurable transfer runs alongside it would be
+        // a worse lie than admitting the total is unknown.
+        if (everyTotalKnown && total > 0) {
+            this._stopSweep();
+            this._progressFill.set_x(1);
+            this._progressFill.set_width(Math.max(1, Math.round(inner * (written / total))));
+            return;
+        }
+        this._startSweep(rate);
     }
 
     /**
-     * The indeterminate sweep runs on its own timeline rather than being
-     * stepped by the poll: at one frame every 700ms it would read as a
-     * block teleporting along the track, not as motion. Bound to this
-     * actor via new_for_actor(), because a bare Clutter.Timeline has no
-     * frame clock and silently never starts.
+     * The activity sweep. Its period is set from the aggregate byte rate,
+     * so it visibly speeds up on a fast transfer and stops dead when one
+     * stalls — the state it can honestly report when no total exists.
+     * Runs on its own timeline rather than being stepped by the poll: at
+     * one frame every 700ms it would read as a block teleporting along the
+     * track. Bound to this actor via new_for_actor(), because a bare
+     * Clutter.Timeline has no frame clock and silently never starts.
      */
-    _startSweep() {
-        if (this._sweep)
+    _startSweep(rate = 0) {
+        // Draw the block first, unconditionally. A stalled transfer has to
+        // *look* stalled, which means a block sitting still — not an empty
+        // track. Pausing a timeline that was never created leaves nothing
+        // painted at all, which is what the first version of this did.
+        if (rate <= 0) {
+            this._sweep?.pause();
+            if (!this._sweep)
+                this._drawSweepSegment(0);
             return;
-        this._sweep = Clutter.Timeline.new_for_actor(this, PROGRESS_SWEEP_MS);
+        }
+
+        const duration = Math.round(clamp(PROGRESS_SWEEP_MS / (1 + rate / SWEEP_RATE_SCALE),
+            PROGRESS_SWEEP_MIN_MS, PROGRESS_SWEEP_MS));
+
+        if (this._sweep && this._sweepDuration === duration) {
+            if (!this._sweep.is_playing())
+                this._sweep.start();
+            return;
+        }
+
+        // Resume from where the previous sweep had got to, so a rate change
+        // retimes the animation instead of snapping the block back to the
+        // left edge every time the transfer speeds up or slows down.
+        const resumeAt = this._sweep?.get_progress() ?? 0;
+        this._stopSweep();
+        this._sweepDuration = duration;
+        this._sweep = Clutter.Timeline.new_for_actor(this, duration);
         this._sweep.set_repeat_count(-1);
-        this._sweep.connect('new-frame', () => {
-            const inner = Math.max(1, this._progressTrack.width - 2);
-            const segment = Math.max(4, Math.round(inner * 0.35));
-            this._progressFill.set_width(segment);
-            this._progressFill.set_x(1 + Math.round((inner - segment) * this._sweep.get_progress()));
-        });
+        this._sweep.connect('new-frame', () => this._drawSweepSegment(this._sweep.get_progress()));
         this._sweep.start();
+        this._sweep.advance(Math.round(resumeAt * duration));
+    }
+
+    _drawSweepSegment(progress) {
+        const inner = Math.max(1, this._progressTrack.width - 2);
+        const segment = Math.max(4, Math.round(inner * 0.35));
+        this._progressFill.set_width(segment);
+        this._progressFill.set_x(1 + Math.round((inner - segment) * progress));
     }
 
     _stopSweep() {
         this._sweep?.stop();
         this._sweep = null;
+        this._sweepDuration = 0;
     }
 
     /**

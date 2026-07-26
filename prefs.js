@@ -79,6 +79,11 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
             title: _('Margem da borda da tela'),
             lower: 0, upper: 40, step: 1, digits: 0,
         }));
+        layoutGroup.add(this._spinRow(gsettings, 'dock-recent-apps', {
+            title: _('Apps recentes'),
+            subtitle: _('Quantos apps não fixados continuam na dock depois de fechados (0 desativa)'),
+            lower: 0, upper: 6, step: 1, digits: 0,
+        }));
         layoutGroup.add(this._switchRow(gsettings, 'dock-autohide', {
             title: _('Ocultar automaticamente'),
             subtitle: _('A dock não reserva espaço de tela e se revela ao aproximar o cursor da borda'),

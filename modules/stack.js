@@ -39,13 +39,25 @@ const LIST_MARGIN = 8;
 // thing.
 const FAN_ICON_SIZE = 56;
 const FAN_ROW_HEIGHT = 68; // vertical distance between consecutive items
-// Measured off the reference macOS shot (four folders plus the Open in
-// Finder cap): the icon column drifts sideways by about 0.16 of an icon's
-// width over the whole climb — roughly 9px against 28px icons — and it
-// drifts *outward*, away from the middle of the screen. Ours drifted by
-// nearly half an icon width, and the wrong way, which is what made the
-// column read as crooked rather than as a fan.
-const FAN_ARC = Math.round(FAN_ICON_SIZE * 0.16);
+// The arc. macOS' fan is a curve, not a lean: the column leaves the dock
+// icon vertically and swings further out with every row it climbs, so a
+// short fan is nearly straight and a tall one bends noticeably. That is why
+// the drift grows with the *square* of the row index rather than linearly —
+// a flat per-row lean either looks like nothing on a five-item fan or like a
+// diagonal on a fifteen-item one.
+//
+// The unit is calibrated on the reference shot, which has four folders plus
+// the Open in Finder cap: five rows, i.e. a top index of 4, and a measured
+// drift of about 9px against 56px icons. 0.01 x 56 x 4^2 = 9. A full
+// fifteen-item fan then reaches 0.56 x 15^2 = 126px, which is the visible
+// curve the reference is too short to show. The cap keeps it there.
+const FAN_ARC_UNIT = FAN_ICON_SIZE * 0.01;
+const FAN_ARC_MAX = Math.round(FAN_ICON_SIZE * 2.5);
+// How many files the fan will show. macOS switches to Grid once a folder
+// outgrows the screen; this instead keeps the fan and shows the newest
+// items, capped, with the Open in Finder row as the way to the rest — his
+// call, and it means a busy Downloads folder still opens as a fan.
+const FAN_MAX_ITEMS = 15;
 // macOS keeps the icons and their name plates upright: the arc is in the
 // path the column takes, not in the items themselves. Ours tilted every
 // row progressively, so thumbnails came out visibly skewed and the text
@@ -58,6 +70,7 @@ const FAN_GAP = 8; // clearance between the dock icon and the first fan item
 // them exactly, so it read as a big grey disc dominating the top of the
 // fan instead of as a small badge finishing it off.
 const FAN_FINDER_SIZE = Math.round(FAN_ICON_SIZE * 0.6);
+
 const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
 const ARROW_SQUARE = 16; // side of the square that, rotated 45°, forms the pointer
@@ -66,6 +79,11 @@ const ARROW_HEIGHT = Math.round((ARROW_SQUARE * Math.SQRT2) / 2);
 const ICON_GAP = ARROW_HEIGHT + 8; // panel clears the dock icon by the pointer's height
 const CORNER_RADIUS = 18;
 const MAX_BLUR_RADIUS = 60;
+
+/** Sideways drift of row `index`, measured from the bottom of the fan. */
+function fanDrift(index) {
+    return Math.min(FAN_ARC_MAX, Math.round(FAN_ARC_UNIT * index * index));
+}
 
 /** One configured folder-stack, bound to a dock icon on open(). */
 export class Stack {
@@ -127,10 +145,17 @@ export class Stack {
             // never disagree about which view is being drawn.
             this._mode = this._resolveMode(entries.length);
 
+            // Entries arrive newest-first (see utils.js sortEntries), so
+            // truncating from the end keeps the most recent files — which
+            // are the ones a Downloads stack exists to show.
+            const shown = this._mode === 'fan'
+                ? entries.slice(0, this._fanCapacity())
+                : entries;
+
             this.createStack();
             this._applyChromeForMode();
             this._applyPanelStyle();
-            this._syncItems(entries);
+            this._syncItems(shown);
 
             const origin = this.calculateOrigin(this._iconActor);
             const geometry = this.positionPanel(origin);
@@ -222,12 +247,24 @@ export class Stack {
         const mode = this._settings.displayMode;
         if (mode !== 'fan')
             return mode;
+        // A folder with more files than fit no longer drops to Grid: the
+        // fan just shows the newest FAN_MAX_ITEMS of them (see
+        // _fanCapacity). Grid is kept only for the case where the screen
+        // cannot hold even a token fan, where a one-item "fan" would be
+        // nonsense rather than a compromise.
+        return this._fanCapacity() >= 2 ? 'fan' : 'grid';
+    }
 
+    /**
+     * How many files the fan will draw: the smaller of the flat cap and
+     * what the screen can actually hold, leaving one row for the "Open in
+     * Finder" cap that tops the column off.
+     */
+    _fanCapacity() {
         const monitorIndex = Main.layoutManager.findIndexForActor(this._iconActor);
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
-        // +1 for the "Open in Finder" row that caps the fan.
         const rowsThatFit = Math.floor((workArea.height - FAN_GAP - PANEL_MARGIN) / FAN_ROW_HEIGHT) - 1;
-        return entryCount > Math.max(1, rowsThatFit) ? 'grid' : 'fan';
+        return Math.max(0, Math.min(FAN_MAX_ITEMS, rowsThatFit));
     }
 
     calculateOrigin(iconActor) {
@@ -279,6 +316,7 @@ export class Stack {
         // than `anchor`: leaning right needs slack on the right for the drift.
         let lean = 0;
         let anchor = 0;
+        let maxDrift = 0;
 
         let width;
         if (mode === 'grid') {
@@ -298,7 +336,10 @@ export class Stack {
             const roomOutward = outward > 0
                 ? (workArea.x + workArea.width - PANEL_MARGIN) - (origin.x + FAN_ICON_SIZE / 2)
                 : (origin.x - FAN_ICON_SIZE / 2) - (workArea.x + PANEL_MARGIN);
-            lean = roomOutward >= FAN_ARC ? outward : -outward;
+            // The topmost row's drift is what has to fit, and on a tall fan
+            // that is far more than one icon's width.
+            maxDrift = fanDrift(this._entries.length);
+            lean = roomOutward >= maxDrift ? outward : -outward;
             // Name plates always trail to the *left* of the column (as in the
             // reference shot), so the room they have is whatever lies between
             // the dock icon and the left edge of the work area. Near that
@@ -306,7 +347,7 @@ export class Stack {
             const roomForPlates = origin.x + FAN_ICON_SIZE / 2 - (workArea.x + PANEL_MARGIN);
             anchor = Math.round(clamp(this._settings.panelSize, FAN_MIN_WIDTH,
                 Math.max(FAN_MIN_WIDTH, roomForPlates)));
-            width = anchor + (lean > 0 ? FAN_ARC : 0);
+            width = anchor + (lean > 0 ? maxDrift : 0);
         }
 
         let height;
@@ -360,7 +401,7 @@ export class Stack {
         else
             y = Math.min(workArea.y + workArea.height - height - PANEL_MARGIN, origin.iconBottom + gap);
 
-        this._geometry = { x, y, width, height, direction, columns: effectiveColumns, contentHeight, anchor, lean };
+        this._geometry = { x, y, width, height, direction, columns: effectiveColumns, contentHeight, anchor, lean, maxDrift };
         return this._geometry;
     }
 
@@ -925,15 +966,16 @@ export class Stack {
             rows.push(this._finderButton);
 
         const bottom = geometry.contentHeight;
-        const lastIndex = Math.max(1, rows.length - 1);
 
         rows.forEach((row, index) => {
-            const t = index / lastIndex; // 0 at the dock, 1 at the top
-            // sin() rather than a straight ramp: the column leaves the dock
-            // icon vertically and only curves away as it climbs, so the
-            // bottom item still reads as sitting on its own icon.
-            const drift = Math.round(FAN_ARC * Math.sin(t * Math.PI / 2));
-
+            // Quadratic in the row index: the column leaves the dock icon
+            // vertically and swings out further with each row, so the
+            // bottom item still sits squarely on its own icon while the top
+            // of a tall fan curves away properly. A sin() ramp normalised
+            // over the row count did the opposite — it produced the same
+            // small total drift whether the fan had four items or fifteen,
+            // which is why a long fan read as a straight line.
+            const drift = fanDrift(index);
             const rowWidth = geometry.anchor + geometry.lean * drift;
             row.set_size(rowWidth, FAN_ROW_HEIGHT);
             row.set_position(0, bottom - (index + 1) * FAN_ROW_HEIGHT);

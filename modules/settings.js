@@ -33,6 +33,10 @@ export class StackSettings {
     get dockMagnificationRange() { return this._gsettings.get_int('dock-magnification-range'); }
     get dockMinimizeEffect() { return this._gsettings.get_string('dock-minimize-effect'); }
     get appearance() { return this._gsettings.get_string('appearance'); }
+    get dockRecentApps() { return this._gsettings.get_int('dock-recent-apps'); }
+
+    getRecentApps() { return this._gsettings.get_strv('recent-apps'); }
+    setRecentApps(ids) { this._gsettings.set_strv('recent-apps', ids); }
 
     getStacks() {
         const raw = this._gsettings.get_string(STACKS_KEY);
