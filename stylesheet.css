@@ -131,48 +131,76 @@
   padding: 4px;
 }
 
+/* spacing/padding are set inline from dockManager.js so they can scale
+ * with the icon size the way the real Dock's do — the values here are
+ * only what applies before the first layout pass. */
 .macos-dock-icon-box {
-  spacing: 10px;
-  padding: 0 10px;
+  spacing: 8px;
+  padding: 0 8px;
 }
 
 .macos-dock-icon-box StBoxLayout {
-  spacing: 6px;
+  spacing: 8px;
 }
 
+/* The single divider between the app section and the stacks/Trash one,
+ * plus the "recent apps" one inside the app section. Matched to GNOME's
+ * own #dash .dash-separator (1px at 10% white with 4px of clearance),
+ * which is itself the closest thing on this desktop to the Dock's. It
+ * used to be twice as bright and butted flush against its neighbours. */
 .macos-dock-separator {
-  background-color: rgba(255, 255, 255, 0.14);
-  margin: 8px 0;
+  background-color: rgba(255, 255, 255, 0.10);
+  margin: 6px 4px;
 }
 
-.macos-dock-trash-icon,
-.macos-dock-folder-icon,
-.macos-dock-show-apps-icon {
-  border-radius: 10px;
-}
-
-.macos-dock-trash-icon:hover,
-.macos-dock-folder-icon:hover,
-.macos-dock-show-apps-icon:hover {
-  background-color: rgba(255, 255, 255, 0.08);
-}
-
-/* Neutralizes the 12px padding 'overview-tile' (GNOME's own app-grid
- * tile class, reused by AppDisplay.AppIcon) carries by default — see
- * dockAppIcon.js for why that padding threw off vertical alignment
- * next to the trash/folder/show-apps icons, none of which use it. */
+/* macOS never draws a hover plate behind a Dock icon: pointing at one
+ * magnifies it and names it, and that is the whole feedback. GNOME's
+ * shared 'overview-tile' rules do draw an opaque rounded rectangle on
+ * hover/active/checked, so each of those states has to be explicitly
+ * flattened rather than merely left unstyled — an absent rule here just
+ * lets the shell theme win. :focus keeps a visible ring, because that one
+ * is keyboard navigation and removing it would make the dock unusable
+ * without a pointer.
+ *
+ * The padding reset is separate: 'overview-tile' carries 12px on every
+ * side for the app-grid (which also reserves room for a label), so at the
+ * same icon-size setting a running app's button was 24px bigger than
+ * every other dock icon — enough to visibly throw off vertical centering
+ * against the trash/folder/show-apps icons, none of which use that class. */
 .macos-dock-app-icon.overview-tile {
   padding: 0;
   border-radius: 10px;
+  background-color: transparent;
 }
 
 .macos-dock-app-icon.overview-tile:hover,
-.macos-dock-app-icon.overview-tile:focus {
-  background-color: rgba(255, 255, 255, 0.08);
+.macos-dock-app-icon.overview-tile:active,
+.macos-dock-app-icon.overview-tile:checked,
+.macos-dock-app-icon.overview-tile:selected,
+.macos-dock-app-icon.overview-tile:highlighted,
+.macos-dock-trash-icon:hover,
+.macos-dock-folder-icon:hover,
+.macos-dock-show-apps-icon:hover,
+.macos-dock-trash-icon:active,
+.macos-dock-folder-icon:active,
+.macos-dock-show-apps-icon:active {
+  background-color: transparent;
 }
 
-.macos-dock-app-icon.overview-tile:active {
-  background-color: rgba(255, 255, 255, 0.14);
+/* The running indicator. GNOME's own .app-grid-running-dot is a 5px
+ * pure-white dot offset 6px below the icon — sized and coloured for the
+ * app grid, where it sits on a dark background well away from anything
+ * else. On a dock bar it reads as a bright bead. macOS uses a smaller,
+ * dimmer dot tucked just under the icon; offset-y is a custom St property
+ * AppIcon reads back through its theme node (see _updateDotStyle in
+ * GNOME's appDisplay.js) and applies as a translation, so it must stay
+ * within the bar's vertical padding or the dot lands off the glass. */
+.macos-dock-app-icon .app-grid-running-dot {
+  height: 4px;
+  width: 4px;
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.85);
+  offset-y: 5px;
 }
 
 /* The floating name label shown above whichever icon the pointer is

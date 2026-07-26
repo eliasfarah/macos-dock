@@ -16,7 +16,11 @@ import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 
 import { animateSpring, SPRING } from './animations.js';
 
-const BOUNCE_HEIGHT = 14;
+// macOS' launch bounce lifts the icon by roughly a third of its own
+// height, so the gesture reads the same whether the Dock is set small or
+// large. A flat 14px looked like a twitch at 96px icons and like a leap at
+// 32px ones.
+const BOUNCE_RATIO = 0.3;
 const ATTENTION_BOUNCE_COUNT = 3;
 // macOS bounces a launching app a few times and then stops, even if the
 // app is still starting. Ours looped for as long as the app stayed in
@@ -97,10 +101,13 @@ class DockAppIcon extends AppDisplay.AppIcon {
     _bounceCycle(shouldContinue) {
         if (!this.get_stage())
             return;
-        animateSpring(this, { translation_y: 0 }, { translation_y: -BOUNCE_HEIGHT }, {
+        // Read per cycle rather than cached: the icon-size preference can
+        // change between one bounce and the next.
+        const height = Math.round((this.icon?.iconSize ?? 48) * BOUNCE_RATIO);
+        animateSpring(this, { translation_y: 0 }, { translation_y: -height }, {
             duration: 160, preset: SPRING.ITEM, id: 'bounce',
             onComplete: () => {
-                animateSpring(this, { translation_y: -BOUNCE_HEIGHT }, { translation_y: 0 }, {
+                animateSpring(this, { translation_y: -height }, { translation_y: 0 }, {
                     duration: 160, preset: SPRING.ITEM, id: 'bounce',
                     onComplete: () => {
                         if (shouldContinue())

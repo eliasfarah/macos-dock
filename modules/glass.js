@@ -39,13 +39,10 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         reactive: true,
         clip_to_allocation: clipContent,
     });
-    panel.set_style(`border-radius: ${cornerRadius}px;`);
-
     const blur = new St.Widget({
         style_class: `${variant}-blur`,
         x_expand: true, y_expand: true,
     });
-    blur.set_style(`border-radius: ${cornerRadius}px;`);
     const blurEffect = new Shell.BlurEffect({
         mode: Shell.BlurMode.BACKGROUND,
         radius: 0,
@@ -57,7 +54,6 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         style_class: `${variant}-tint`,
         x_expand: true, y_expand: true,
     });
-    tint.set_style(`border-radius: ${cornerRadius}px;`);
 
     const sheen = new St.Widget({
         style_class: `${variant}-sheen`,
@@ -66,7 +62,6 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         y_align: Clutter.ActorAlign.START,
         height: 46,
     });
-    sheen.set_style(`border-radius: ${cornerRadius}px ${cornerRadius}px 0 0;`);
 
     const content = new St.Widget({
         style_class: `${variant}-content`,
@@ -78,7 +73,6 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         style_class: `${variant}-border`,
         x_expand: true, y_expand: true,
     });
-    border.set_style(`border-radius: ${cornerRadius}px;`);
 
     panel.add_child(blur);
     panel.add_child(tint);
@@ -90,7 +84,27 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
     // can switch the whole glass surface off and keep only `content` —
     // the macOS Fan view draws no panel at all, its items float free
     // over the desktop.
-    return { panel, content, blurEffect, tint, background: [blur, tint, sheen, border] };
+    const surface = { panel, content, blurEffect, tint, background: [blur, tint, sheen, border] };
+    applyPanelRadius(surface, cornerRadius);
+    return surface;
+}
+
+/**
+ * Rounds every layer of a glass surface at once. St has no way to inherit
+ * a border-radius, so each layer carries its own — which means a caller
+ * that wants to *change* the radius later (the dock scales it with its
+ * icon size, the way macOS does) has to restyle all five actors together
+ * or end up with a rounded bar wearing a square sheen.
+ */
+export function applyPanelRadius({ panel, background }, cornerRadius) {
+    const [blur, tint, sheen, border] = background;
+    panel.set_style(`border-radius: ${cornerRadius}px;`);
+    blur.set_style(`border-radius: ${cornerRadius}px;`);
+    tint.set_style(`border-radius: ${cornerRadius}px;`);
+    // Top corners only: the sheen is a highlight along the upper edge, so
+    // rounding its bottom would pull it away from the panel's sides.
+    sheen.set_style(`border-radius: ${cornerRadius}px ${cornerRadius}px 0 0;`);
+    border.set_style(`border-radius: ${cornerRadius}px;`);
 }
 
 export function createShadowActor({ cornerRadius = 18 } = {}) {

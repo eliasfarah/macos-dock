@@ -25,18 +25,30 @@ import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import { createGlassPanel } from './glass.js';
+import { createGlassPanel, applyPanelRadius } from './glass.js';
 import { clamp, getActorGeometry } from './utils.js';
 import { animateSpring, cancelSpring, SPRING } from './animations.js';
 import { DockAppIcon } from './dockAppIcon.js';
 import { DockFolderIcon } from './dockFolderIcon.js';
-import { createDockSeparator } from './dockSeparator.js';
+import { createDockSeparator, SEPARATOR_TOTAL_WIDTH } from './dockSeparator.js';
 import { DockTrashIcon } from './dockTrashIcon.js';
 import { DockShowAppsIcon } from './dockShowAppsIcon.js';
 
-const DOCK_RADIUS = 20;
 const DOCK_MIN_WIDTH = 120;
-const DOCK_VERTICAL_PADDING = 12;
+
+// macOS' Dock is one shape scaled up and down: at every icon size the gaps,
+// the padding around the row and the bar's corner radius keep the same
+// proportion to the icons. Ours were three fixed pixel constants, so the
+// bar only looked right at one setting — shrink the icons and it turned
+// into a thick slab with cavernous gaps, grow them and it read as a tight
+// strip with square-ish corners. These ratios are measured off the real
+// Dock; the clamps keep the extremes sane.
+const PADDING_RATIO = 0.14; // vertical breathing room above/below the icons
+const SPACING_RATIO = 0.14; // gap between icons, and at the row's two ends
+const RADIUS_RATIO = 0.30;
+const PADDING_RANGE = [7, 14];
+const SPACING_RANGE = [5, 12];
+const RADIUS_RANGE = [12, 26];
 const MAX_BLUR_RADIUS = 60; // matches stack.js's own ceiling for the same setting
 const AUTOHIDE_TRIGGER_HEIGHT = 2; // reveal band pinned to the screen edge
 const UNPIN_DROP_MARGIN = 60; // how far past the dock a drop must land to unpin
@@ -57,7 +69,7 @@ export class DockManager {
         this._trashIcon = null;
         this._showAppsIcon = null;
         this._strutActor = null;
-        this._sepStacks = null;
+        this._sepTrailing = null;
         this._sepRunning = null;
 
         this._contextMenu = null;
@@ -125,11 +137,14 @@ export class DockManager {
         // clipContent: false — a magnified icon needs to overflow above
         // the dock bar's own rectangle (see glass.js), not be clipped to
         // it the way the Stack panel's item grid is.
-        const { panel, content, blurEffect } = createGlassPanel({
-            cornerRadius: DOCK_RADIUS,
+        const surface = createGlassPanel({
+            cornerRadius: this._dockMetrics().radius,
             clipContent: false,
             variant: 'macos-dock-panel',
         });
+        const { panel, content, blurEffect } = surface;
+        this._surface = surface;
+        this._blurEffect = blurEffect;
         this._dockActor = panel;
         this._content = content;
         this._dockActor.set({ reactive: true });
@@ -140,14 +155,15 @@ export class DockManager {
         // driven by an open/close spring.
         blurEffect.radius = (this._settings.blurIntensity / 100) * MAX_BLUR_RADIUS;
 
-        // Four sections in one row — a "show apps" launcher, pinned/
-        // running apps, folder-stacks (empty until configured), and a
-        // trailing trash icon — each its own inner BoxLayout so items
-        // within a section can be added/removed/reordered without
-        // touching the others. this._sepStacks is kept visible only
-        // while stacksBox actually has children (see _redisplayStacks)
-        // so an empty Stacks section doesn't read as a doubled-up
-        // separator butted against the apps/trash one.
+        // The macOS Dock has exactly TWO sections and therefore exactly
+        // ONE divider: applications on the left (Finder, Launchpad, then
+        // everything else), and stacks plus the Trash on the right. Ours
+        // drew three dividers — one after the launcher, one before the
+        // stacks and one before the Trash — which is the main reason the
+        // bar read as a GNOME panel with sections rather than as a Dock.
+        // The only extra rule is the divider inside the app section that
+        // marks off running-but-unpinned apps, which macOS does draw when
+        // "show recent applications" is on.
         this._iconBox = new St.BoxLayout({
             vertical: false,
             reactive: true, // needed to receive motion-event for magnification
@@ -172,13 +188,14 @@ export class DockManager {
         this._trackTooltip(this._showAppsIcon, () => 'Aplicativos');
         this._trackTooltip(this._trashIcon, () => 'Lixeira');
 
+        // The launcher belongs *inside* the app section (Launchpad sits
+        // among the apps on a real Dock), and the Trash shares the trailing
+        // section with the stacks rather than being fenced off from them.
+        this._sepTrailing = createDockSeparator();
         this._iconBox.add_child(this._showAppsIcon);
-        this._iconBox.add_child(createDockSeparator());
         this._iconBox.add_child(this._appsBox);
-        this._iconBox.add_child(createDockSeparator());
-        this._sepStacks = createDockSeparator();
+        this._iconBox.add_child(this._sepTrailing);
         this._iconBox.add_child(this._stacksBox);
-        this._iconBox.add_child(this._sepStacks);
         this._iconBox.add_child(this._trashIcon);
 
         // A floating, content-sized bar (centered, with a margin on
@@ -372,6 +389,9 @@ export class DockManager {
         if (!this._dockActor || this._dockHidden)
             return;
         this._dockHidden = true;
+        // The tooltip is separate chrome, so it would otherwise be left
+        // floating over the desktop naming an icon that just slid away.
+        this._hideTooltip();
 
         // Slid down by its own full height plus the edge margin, so no
         // sliver is left poking above the screen edge at any margin
@@ -484,38 +504,112 @@ export class DockManager {
 
         this._dockActor?.destroy();
         this._dockActor = null;
+        this._surface = null;
+        this._blurEffect = null;
         this._content = null;
         this._iconBox = null;
         this._appsBox = null;
         this._stacksBox = null;
-        this._sepStacks = null;
+        this._sepTrailing = null;
         this._sepRunning = null;
         this._trashIcon = null;
         this._showAppsIcon = null;
+    }
+
+    /** Every proportional measurement of the bar, derived from icon size. */
+    _dockMetrics() {
+        const iconSize = this._settings.dockIconSize;
+        return {
+            iconSize,
+            padding: clamp(Math.round(iconSize * PADDING_RATIO), ...PADDING_RANGE),
+            spacing: clamp(Math.round(iconSize * SPACING_RATIO), ...SPACING_RANGE),
+            radius: clamp(Math.round(iconSize * RADIUS_RATIO), ...RADIUS_RANGE),
+        };
+    }
+
+    /**
+     * Pushes those measurements onto the actors. Spacing and the row's end
+     * padding live in an inline style rather than the stylesheet because
+     * St's CSS has no way to express "a fraction of the icon size", and
+     * they have to change the moment the icon-size preference does.
+     */
+    _applyDockMetrics(metrics) {
+        // One spacing value everywhere — the outer row and the two inner
+        // section boxes — so the gap between two apps is the same as the
+        // gap between the last app and the divider. They used to differ
+        // (10px outer, 6px inner), which read as the sections being
+        // shoved apart.
+        const spacing = `spacing: ${metrics.spacing}px;`;
+        this._iconBox?.set_style(`${spacing} padding: 0 ${metrics.spacing}px;`);
+        this._appsBox?.set_style(spacing);
+        this._stacksBox?.set_style(spacing);
+
+        // An empty-but-visible section box still earns a spacing gap from
+        // its parent, leaving a phantom hole beside the divider when no
+        // stack is configured. Hiding it makes Clutter's box layout skip
+        // it — and the gap — entirely.
+        if (this._appsBox)
+            this._appsBox.visible = this._appIcons.size > 0;
+        if (this._stacksBox)
+            this._stacksBox.visible = this._stackIcons.size > 0;
+
+        if (this._surface)
+            applyPanelRadius(this._surface, metrics.radius);
+    }
+
+    /**
+     * The row's width, computed rather than measured.
+     *
+     * `_iconBox.get_preferred_width()` looks like the obvious source of
+     * truth and is not one: changing the icon-size preference sets a new
+     * `icon_size` on every St.Icon, but the resulting size invalidation
+     * only reaches the parent box on the *next* relayout cycle — so a
+     * measurement taken in the same call still describes the previous icon
+     * size. Confirmed by measuring: at a 48px setting the bar came out
+     * 275px wide while its own children ran to 299px, leaving the Trash
+     * hanging 17px off the end of the glass; one step earlier, at 36px,
+     * the bar was 56px too wide instead. Every dock item is exactly
+     * `iconSize` across and every gap is known, so the sum is exact and
+     * immune to when a texture happens to finish loading.
+     */
+    _naturalRowWidth(metrics) {
+        const widths = [metrics.iconSize]; // show-apps launcher
+        for (let i = 0; i < this._appIcons.size; i++)
+            widths.push(metrics.iconSize);
+        if (this._sepRunning?.visible)
+            widths.push(SEPARATOR_TOTAL_WIDTH);
+        if (this._sepTrailing?.visible)
+            widths.push(SEPARATOR_TOTAL_WIDTH);
+        for (let i = 0; i < this._stackIcons.size; i++)
+            widths.push(metrics.iconSize);
+        widths.push(metrics.iconSize); // trash
+
+        const content = widths.reduce((total, width) => total + width, 0);
+        const gaps = metrics.spacing * Math.max(0, widths.length - 1);
+        return content + gaps + metrics.spacing * 2; // + the row's end padding
     }
 
     _layoutDock() {
         if (!this._dockActor)
             return;
 
+        const metrics = this._dockMetrics();
+        this._applyDockMetrics(metrics);
+
         const monitorIndex = Main.layoutManager.primaryIndex;
         const monitor = Main.layoutManager.monitors[monitorIndex];
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
         const margin = this._settings.dockEdgeMargin;
 
-        // Measure the icon row itself, not the panel actor: the panel's
-        // own get_preferred_width() goes through two nested BinLayout
-        // levels (panel -> content), and BinLayout reports the *max* of
-        // its overlapping children's preferred sizes — the blur/tint/
-        // sheen/border layers are all x_expand with no intrinsic size of
-        // their own, so that max collapses to something far smaller than
-        // what the icon row actually needs (confirmed live: 202px
-        // reported vs. 684px actually required for 6 icons) and the
-        // panel's own clip_to_allocation then silently hides every icon
-        // past that too-narrow width.
-        const [, naturalWidth] = this._iconBox.get_preferred_width(-1);
-        const width = clamp(naturalWidth, DOCK_MIN_WIDTH, workArea.width - margin * 2);
-        const height = this._settings.dockIconSize + DOCK_VERTICAL_PADDING * 2;
+        // Computed from the row's contents, not measured off any actor —
+        // see _naturalRowWidth for why measuring is unreliable here. (The
+        // panel actor itself was never a candidate: its preferred width
+        // goes through two nested BinLayouts, which report the *max* of
+        // their overlapping children, and the blur/tint/sheen/border
+        // layers all expand with no intrinsic size, so that max collapses
+        // far below what the icon row needs.)
+        const width = clamp(this._naturalRowWidth(metrics), DOCK_MIN_WIDTH, workArea.width - margin * 2);
+        const height = metrics.iconSize + metrics.padding * 2;
 
         const x = workArea.x + (workArea.width - width) / 2;
 
@@ -682,6 +776,13 @@ export class DockManager {
             this._disableMagnification();
             this._enableMagnification();
             break;
+        case 'blur-intensity':
+            // Same class of gap as the dock-* keys above: the dock reads
+            // this once at build time, so without a listener the slider
+            // did nothing to the bar until the next login.
+            if (this._blurEffect)
+                this._blurEffect.radius = (this._settings.blurIntensity / 100) * MAX_BLUR_RADIUS;
+            break;
         }
     }
 
@@ -793,12 +894,6 @@ export class DockManager {
             }
         });
 
-        // Two separators permanently framed the Stacks section
-        // (apps | stacks | trash) even when no stack was configured,
-        // which with an empty stacksBox in between reads as one doubled-
-        // up line rather than a single divider between apps and trash.
-        if (this._sepStacks)
-            this._sepStacks.visible = configs.length > 0;
     }
 
     // -- hover magnification ------------------------------------------------
