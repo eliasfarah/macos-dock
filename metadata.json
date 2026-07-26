@@ -2,8 +2,10 @@
   "uuid": "macos-dock-stack@eliasfa.gmail.com",
   "name": "macOS Dock Stack",
   "description": "Dock persistente ao estilo macOS, construída do zero: apps fixados/rodando, magnificação, indicadores, efeito genie ao minimizar e stacks de pasta (Finder Stack) — um ícone de pasta se expande, a partir do próprio ícone, em um painel de vidro com efeito de mola (spring), blur de fundo e revelação escalonada dos itens.",
-  "shell-version": ["50"],
-  "url": "",
+  "shell-version": [
+    "50"
+  ],
+  "url": "https://github.com/eliasfarah/macos-dock",
   "version-name": "1.0.0",
   "settings-schema": "org.gnome.shell.extensions.macos-dock-stack",
   "gettext-domain": "macos-dock-stack"
