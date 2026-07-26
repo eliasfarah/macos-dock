@@ -19,6 +19,11 @@ import { generateStackId } from './modules/utils.js';
 const DIRECTION_VALUES = ['auto', 'up', 'down'];
 const MODE_VALUES = ['grid', 'fan', 'stack'];
 const MINIMIZE_EFFECT_VALUES = ['genie', 'default'];
+const APPEARANCE_VALUES = ['system', 'light', 'dark'];
+
+function appearanceLabels() {
+    return [_('Seguir o sistema'), _('Claro'), _('Escuro')];
+}
 
 function minimizeEffectLabels() {
     return [_('Genie (estilo macOS)'), _('Padrão do GNOME Shell')];
@@ -32,7 +37,10 @@ function directionLabels() {
 }
 
 function modeLabels() {
-    return [_('Grade'), _('Leque'), _('Pilha')];
+    // "Lista", not "Pilha": this mode draws macOS' List view — one compact
+    // row per file — and calling it a pile described the old cascading-tiles
+    // look that was replaced.
+    return [_('Grade'), _('Leque'), _('Lista')];
 }
 
 export default class MacosDockStackPreferences extends ExtensionPreferences {
@@ -53,6 +61,12 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
             title: _('Dock'),
             icon_name: 'view-app-grid-symbolic',
         });
+
+        const appearanceGroup = new Adw.PreferencesGroup({ title: _('Aparência') });
+        page.add(appearanceGroup);
+        appearanceGroup.add(this._comboRow(gsettings, 'appearance', APPEARANCE_VALUES, appearanceLabels(), {
+            title: _('Esquema de cores'),
+        }));
 
         const layoutGroup = new Adw.PreferencesGroup({ title: _('Layout') });
         page.add(layoutGroup);

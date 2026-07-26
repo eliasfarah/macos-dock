@@ -18,16 +18,32 @@
  * _shouldAnimateActor). We only need to run our own cosmetic
  * animation; we never call completed_minimize/unminimize ourselves.
  *
- * Caveat (flagged, not yet live-tested): since GNOME's own handler
- * calls completed_minimize/unminimize essentially as soon as it sees
- * the skip, our animation's tail end could in principle be cut short
- * if Mutter hides the actor before our spring settles. If that reads
- * badly in practice, shortening GENIE_DURATION is the first thing to
- * try — worst case is a cosmetic glitch, not a functional break, and
- * the dock-minimize-effect preference is a one-setting escape hatch
- * back to GNOME's default effect either way.
+ * That caveat turned out to be the whole story, and it is why nothing
+ * appeared to happen on minimize: skipNextEffect() does not defer the
+ * completion, it *brings it forward*. Reading the real
+ * windowManager.js, `_minimizeWindow` calls `_shouldAnimateActor()`
+ * first, and that method both consumes the skip flag and returns false,
+ * whereupon the handler calls `shellwm.completed_minimize(actor)`
+ * immediately — so Mutter hides the window actor on the very same
+ * frame our spring starts. The animation ran to completion every time,
+ * on an actor nobody could see.
+ *
+ * `_minimizeWindow` is connected as `this._minimizeWindow.bind(this)`,
+ * so the closure captured the original function and monkey-patching
+ * Main.wm cannot intercept it. What we can do is own the actor's
+ * visibility for the length of our own animation: show it back after
+ * the shell has hidden it, animate, and hide it again at the end. The
+ * window is already minimized as far as Mutter and the app are
+ * concerned throughout — this only affects what is painted.
+ *
+ * Separately, the dock now tells each window where its icon *is*
+ * (Meta.Window.set_icon_geometry). That is what GNOME's own minimize
+ * animation reads to decide where to shrink a window to, so with the
+ * genie switched off, windows still fly to their dock icon instead of
+ * collapsing toward a corner of the monitor.
  */
 
+import Meta from 'gi://Meta';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { animateSpring, cancelSpring, SPRING } from './animations.js';
@@ -139,10 +155,34 @@ export class MinimizeEffectManager {
         const [width, height] = actor.get_size();
         actor.set_pivot_point(0.5, 1);
 
+        // GNOME's own handler runs after ours and hides the actor on this
+        // same frame (see the file header). Re-showing it from a later,
+        // which runs after that handler but before anything is painted,
+        // is what makes the animation visible at all — without this the
+        // spring animated a hidden actor and the window simply vanished.
+        const laters = global.compositor.get_laters();
+        laters.add(Meta.LaterType.BEFORE_REDRAW, () => {
+            if (this._minimizedActors.has(actor))
+                actor.show();
+            return false;
+        });
+
         animateSpring(actor,
             { x: actor.x, y: actor.y, scale_x: 1, scale_y: 1, opacity: 255 },
             { x: geometry.centerX - width / 2, y: geometry.centerY - height, scale_x: 0.05, scale_y: 0.05, opacity: 0 },
-            { duration: GENIE_DURATION, preset: SPRING.PANEL, speed: this._settings.animationSpeed });
+            {
+                duration: GENIE_DURATION,
+                preset: SPRING.PANEL,
+                speed: this._settings.animationSpeed,
+                onComplete: () => {
+                    // Handed back to Mutter's own state: the window is
+                    // minimized, so it must not stay painted. The
+                    // transform is left as-is deliberately —
+                    // _animateGenieIn() reads it as its starting point.
+                    if (this._minimizedActors.has(actor))
+                        actor.hide();
+                },
+            });
     }
 
     _animateGenieIn(actor, window) {
@@ -156,6 +196,10 @@ export class MinimizeEffectManager {
         // shadows.
         const buffer = window.get_buffer_rect();
         actor.set_pivot_point(0.5, 1);
+        // Symmetric to the hide above: our own minimize left the actor
+        // hidden, and the unminimize path skips GNOME's effect too, so
+        // nothing else will bring it back.
+        actor.show();
 
         animateSpring(actor,
             { x: actor.x, y: actor.y, scale_x: actor.scale_x, scale_y: actor.scale_y, opacity: actor.opacity },

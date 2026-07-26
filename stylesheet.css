@@ -7,35 +7,33 @@
  * rules, which meant restyling the stack panel silently repainted the
  * whole dock too. Loaded automatically while the extension is enabled.
  *
- * Both are tuned for macOS *dark* mode: a dark translucent surface that
- * lets the real background blur show through, a bright hairline along
- * the top edge, and a soft inner border. Note the tint layers are
- * intentionally low-alpha — the blur behind them is the whole point,
- * and an opaque fill would flatten it into a plain grey slab.
+ * -- where the numbers come from -----------------------------------
+ *
+ * St has no media queries, so light and dark are two explicit palettes
+ * selected by a marker class that modules/appearance.js stamps on each
+ * surface's root actor (.macos-appearance-light / -dark). Every value
+ * below was measured off real macOS Tahoe screenshots rather than
+ * guessed:
+ *
+ *   Light (Apple's own Dock help images): the bar over a blue wallpaper
+ *   samples (62,116,158) just outside and (77,132,176) just inside its
+ *   top edge, falling to (68,121,166) at the bottom — a white wash of
+ *   roughly 12% fading to 5%, not the 40-55% dark fill this used to
+ *   paint. Its rim samples (114,176,203) against a (88,146,175)
+ *   interior: white at about 25-30%, one pixel wide.
+ *
+ *   Dark (a real Tahoe desktop): backdrop 28 -> rim 53 -> interior 19
+ *   across the top edge, and interior 10 -> rim 79 -> backdrop 12
+ *   across the bottom. So the glass *darkens* what is behind it by
+ *   about a third, and the lower rim is the brighter of the two — which
+ *   is why glass.js draws an underglow as well as a sheen.
+ *
+ * The tints are intentionally low-alpha in both schemes: the blur behind
+ * them is the whole point, and an opaque fill flattens it into a plain
+ * slab.
  */
 
-/* -- stack panel -------------------------------------------------- */
-
-.macos-stack-panel {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.macos-stack-panel-tint {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(58, 58, 64, 0.42);
-  background-gradient-end: rgba(28, 28, 32, 0.52);
-}
-
-.macos-stack-panel-sheen {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0.14);
-  background-gradient-end: rgba(255, 255, 255, 0);
-}
-
-.macos-stack-panel-border {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.20) inset;
-}
+/* -- stack panel: shared structure --------------------------------- */
 
 .macos-stack-panel-content {
   padding: 0;
@@ -45,38 +43,156 @@
  * lower edges of this square are ever visible (see stack.js: it's
  * rotated 45° inside a half-height clip), so the border reads as the
  * triangle's own outline. The background colour is overridden at
- * runtime to track the panel's opacity setting. */
+ * runtime to track the panel's opacity setting and the active scheme. */
 .macos-stack-arrow {
   background-color: rgba(28, 28, 32, 0.52);
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-/* -- dock bar ------------------------------------------------------ */
+/* -- stack panel: dark --------------------------------------------- */
 
-.macos-dock-panel {
-  border: 1px solid rgba(255, 255, 255, 0.10);
+.macos-stack-panel.macos-appearance-dark {
+  border: 1px solid rgba(255, 255, 255, 0.16);
 }
 
-.macos-dock-panel-tint {
+.macos-stack-panel.macos-appearance-dark .macos-stack-panel-tint {
   background-gradient-direction: vertical;
-  background-gradient-start: rgba(62, 62, 68, 0.40);
-  background-gradient-end: rgba(24, 24, 28, 0.55);
+  background-gradient-start: rgba(46, 46, 52, 0.34);
+  background-gradient-end: rgba(20, 20, 24, 0.46);
 }
 
-.macos-dock-panel-sheen {
+.macos-stack-panel.macos-appearance-dark .macos-stack-panel-sheen {
   background-gradient-direction: vertical;
   background-gradient-start: rgba(255, 255, 255, 0.16);
   background-gradient-end: rgba(255, 255, 255, 0);
 }
 
-.macos-dock-panel-border {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset;
+.macos-stack-panel.macos-appearance-dark .macos-stack-panel-underglow {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0);
+  background-gradient-end: rgba(255, 255, 255, 0.10);
 }
+
+.macos-stack-panel.macos-appearance-dark .macos-stack-panel-border {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.26) inset;
+}
+
+/* -- stack panel: light -------------------------------------------- */
+
+.macos-stack-panel.macos-appearance-light {
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.macos-stack-panel.macos-appearance-light .macos-stack-panel-tint {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.42);
+  background-gradient-end: rgba(255, 255, 255, 0.3);
+}
+
+.macos-stack-panel.macos-appearance-light .macos-stack-panel-sheen {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.4);
+  background-gradient-end: rgba(255, 255, 255, 0);
+}
+
+.macos-stack-panel.macos-appearance-light .macos-stack-panel-underglow {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0);
+  background-gradient-end: rgba(255, 255, 255, 0.22);
+}
+
+.macos-stack-panel.macos-appearance-light .macos-stack-panel-border {
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.85) inset;
+}
+
+/* -- dock bar: shared structure ------------------------------------ */
 
 .macos-dock-panel-content {
   padding: 0;
 }
+
+/* -- dock bar: dark ------------------------------------------------- */
+
+.macos-dock-panel.macos-appearance-dark {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.macos-dock-panel.macos-appearance-dark .macos-dock-panel-tint {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(30, 30, 34, 0.3);
+  background-gradient-end: rgba(10, 10, 12, 0.42);
+}
+
+.macos-dock-panel.macos-appearance-dark .macos-dock-panel-sheen {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.14);
+  background-gradient-end: rgba(255, 255, 255, 0);
+}
+
+.macos-dock-panel.macos-appearance-dark .macos-dock-panel-underglow {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0);
+  background-gradient-end: rgba(255, 255, 255, 0.14);
+}
+
+.macos-dock-panel.macos-appearance-dark .macos-dock-panel-border {
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.16) inset;
+}
+
+.macos-dock-panel.macos-appearance-dark .macos-dock-separator {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+/* macOS' running indicator is a dark dot on a light Dock and a light one
+ * on a dark Dock — it is not a fixed colour. Measured off the reference
+ * shots at roughly a tenth of the icon's own size, sitting well below the
+ * icon rather than tucked against it; the size and offset are set from
+ * dockManager.js so they scale with the icon-size preference. */
+.macos-dock-panel.macos-appearance-dark .macos-dock-app-icon .app-grid-running-dot {
+  background-color: rgba(255, 255, 255, 0.92);
+}
+
+/* -- dock bar: light ------------------------------------------------ */
+
+.macos-dock-panel.macos-appearance-light {
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.macos-dock-panel.macos-appearance-light .macos-dock-panel-tint {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.16);
+  background-gradient-end: rgba(255, 255, 255, 0.06);
+}
+
+.macos-dock-panel.macos-appearance-light .macos-dock-panel-sheen {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0.34);
+  background-gradient-end: rgba(255, 255, 255, 0);
+}
+
+.macos-dock-panel.macos-appearance-light .macos-dock-panel-underglow {
+  background-gradient-direction: vertical;
+  background-gradient-start: rgba(255, 255, 255, 0);
+  background-gradient-end: rgba(255, 255, 255, 0.24);
+}
+
+.macos-dock-panel.macos-appearance-light .macos-dock-panel-border {
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.macos-dock-panel.macos-appearance-light .macos-dock-separator {
+  background-color: rgba(0, 0, 0, 0.16);
+}
+
+.macos-dock-panel.macos-appearance-light .macos-dock-app-icon .app-grid-running-dot {
+  background-color: rgba(0, 0, 0, 0.72);
+}
+
+/* -- stack panel contents ------------------------------------------ */
 
 .macos-stack-shadow {
   background-color: rgba(0, 0, 0, 0.55);
@@ -91,7 +207,7 @@
 
 .macos-stack-item:hover,
 .macos-stack-item:focus {
-  background-color: rgba(255, 255, 255, 0.10);
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 .macos-stack-item:active {
@@ -119,6 +235,24 @@
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 
+.macos-appearance-light .macos-stack-item-label,
+.macos-appearance-light .macos-stack-row-label {
+  color: rgba(0, 0, 0, 0.88);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.macos-appearance-light .macos-stack-item:hover,
+.macos-appearance-light .macos-stack-item:focus,
+.macos-appearance-light .macos-stack-row:hover,
+.macos-appearance-light .macos-stack-row:focus {
+  background-color: rgba(0, 0, 0, 0.09);
+}
+
+.macos-appearance-light .macos-stack-item:active,
+.macos-appearance-light .macos-stack-row:active {
+  background-color: rgba(0, 0, 0, 0.16);
+}
+
 .macos-stack-dash-icon {
   border-radius: 10px;
 }
@@ -130,6 +264,8 @@
 .macos-stack-dash-icon-image {
   padding: 4px;
 }
+
+/* -- dock row -------------------------------------------------------- */
 
 /* spacing/padding are set inline from dockManager.js so they can scale
  * with the icon size the way the real Dock's do — the values here are
@@ -143,14 +279,14 @@
   spacing: 8px;
 }
 
-/* The single divider between the app section and the stacks/Trash one,
- * plus the "recent apps" one inside the app section. Matched to GNOME's
- * own #dash .dash-separator (1px at 10% white with 4px of clearance),
- * which is itself the closest thing on this desktop to the Dock's. It
- * used to be twice as bright and butted flush against its neighbours. */
+/* The two dividers macOS draws: pinned apps | recently-opened apps |
+ * files, folders and Trash. Both are short hairlines centred on the bar
+ * rather than full-height rules — measured at roughly 60% of the bar's
+ * height in Apple's own Dock screenshots — so the height comes from
+ * dockManager.js. Colour is per-scheme above: dark on a light Dock,
+ * light on a dark one. */
 .macos-dock-separator {
-  background-color: rgba(255, 255, 255, 0.10);
-  margin: 6px 4px;
+  background-color: rgba(255, 255, 255, 0.16);
 }
 
 /* macOS never draws a hover plate behind a Dock icon: pointing at one
@@ -187,20 +323,24 @@
   background-color: transparent;
 }
 
-/* The running indicator. GNOME's own .app-grid-running-dot is a 5px
- * pure-white dot offset 6px below the icon — sized and coloured for the
- * app grid, where it sits on a dark background well away from anything
- * else. On a dock bar it reads as a bright bead. macOS uses a smaller,
- * dimmer dot tucked just under the icon; offset-y is a custom St property
- * AppIcon reads back through its theme node (see _updateDotStyle in
- * GNOME's appDisplay.js) and applies as a translation, so it must stay
- * within the bar's vertical padding or the dot lands off the glass. */
-.macos-dock-app-icon .app-grid-running-dot {
-  height: 4px;
-  width: 4px;
+/* The download progress bar drawn across the foot of a folder-stack icon
+ * while something is still being written into that folder, the way the
+ * macOS Dock shows a download in flight. The track is always visible once
+ * a download starts so the bar has something to travel along. */
+.macos-dock-progress-track {
+  background-color: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.85);
-  offset-y: 5px;
+}
+
+.macos-dock-progress-fill {
+  background-color: rgba(70, 150, 255, 0.95);
+  border-radius: 3px;
+}
+
+.macos-appearance-light .macos-dock-progress-track {
+  background-color: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(0, 0, 0, 0.2);
 }
 
 /* The floating name label shown above whichever icon the pointer is
@@ -214,6 +354,12 @@
   color: rgba(255, 255, 255, 0.95);
   text-align: center;
   box-shadow: 0 4px 12px 0 rgba(0, 0, 0, 0.4);
+}
+
+.macos-appearance-light .macos-dock-tooltip {
+  background-color: rgba(250, 250, 252, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  color: rgba(0, 0, 0, 0.9);
 }
 
 /* macOS' List stack view: one compact row per file — small icon, then
@@ -247,7 +393,9 @@
 /* macOS' Fan view. There is no panel behind these — the rows float over
  * the desktop — so each name gets its own dark plate for legibility
  * against whatever wallpaper is underneath, and the icons carry a drop
- * shadow of their own. */
+ * shadow of their own. The plates stay dark in both schemes: they sit on
+ * the wallpaper, not on either of our surfaces, so there is nothing for
+ * them to match. */
 .macos-stack-fan-item {
   background-color: transparent;
 }
@@ -263,7 +411,7 @@
 
 .macos-stack-fan-label {
   background-color: rgba(38, 38, 42, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 7px;
   padding: 5px 12px;
   font-size: 13px;
@@ -276,11 +424,12 @@
   background-color: rgba(58, 58, 64, 0.96);
 }
 
-/* The circular "open the folder itself" badge that caps the fan. */
+/* The circular "open the folder itself" badge that caps the fan. Sized
+ * from stack.js (macOS draws it noticeably smaller than the file icons
+ * below it), so only the paint lives here. */
 .macos-stack-fan-finder {
   background-color: rgba(58, 58, 64, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 28px;
   color: rgba(255, 255, 255, 0.96);
   box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.45);
 }

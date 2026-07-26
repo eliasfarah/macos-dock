@@ -118,6 +118,24 @@ class DockAppIcon extends AppDisplay.AppIcon {
         });
     }
 
+    /**
+     * Sizes and positions the running indicator. GNOME's own
+     * `.app-grid-running-dot` is a fixed 5px pure-white dot offset 6px,
+     * calibrated for the app grid; macOS scales its dot with the icon and
+     * puts it further down, clear of the icon's foot. Those are per-icon-
+     * size numbers, which St's CSS cannot express, so DockManager pushes
+     * them in as an inline style — the colour stays in the stylesheet
+     * because that one flips with the light/dark scheme.
+     *
+     * Setting the style is what makes this work at all: `offset-y` is a
+     * custom St property AppIcon reads back off the dot's theme node from
+     * a 'style-changed' handler (_updateDotStyle in GNOME's appDisplay.js)
+     * and applies as a translation, and set_style() is what emits that.
+     */
+    setDotStyle(style) {
+        this._dot?.set_style(style);
+    }
+
     // Overview-entry visual effects used during app-grid DND — meaningless
     // on a persistent dock, disabled exactly like the native DashIcon does.
     scaleAndFade() {

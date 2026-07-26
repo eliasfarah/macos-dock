@@ -39,33 +39,109 @@ export function generateStackId() {
 /**
  * Lists the contents of a directory asynchronously and invokes
  * `callback(entries)` on completion. `entries` is always an array
- * (empty on error), sorted by display name.
+ * (empty on error), newest first — see sortEntries().
  */
 const ENUMERATE_ATTRIBUTES = [
     'standard::name',
+    // Required, not optional: info.get_file_type() reads this attribute
+    // and a GFileInfo queried without it fails an internal assertion
+    // ("GFileInfo created without standard::type" / "should not be
+    // reached") and returns garbage — so `isDirectory` was never actually
+    // being answered from real data. Silent until the shell is run with
+    // --debug-control, which is how it finally showed up.
+    'standard::type',
     'standard::display-name',
     'standard::icon',
     'standard::content-type',
+    'standard::size',
     // Populated only if a thumbnail was already generated and cached
     // (e.g. by Nautilus) under the freedesktop thumbnail spec — cheap
     // to query, no extra dependency, and covers the common case.
     'thumbnail::path',
     'thumbnail::is-valid',
+    // Ordering. `time::created` is the closest thing GIO exposes to
+    // Finder's "Date Added" — it is the inode change/birth time, so a
+    // file copied into the folder today sorts as new even if its
+    // modification time is years old. Not every filesystem records it,
+    // hence the fallback to `time::modified` in sortEntries().
+    'time::modified',
+    'time::created',
 ].join(',');
 
 const ENUMERATE_BATCH_SIZE = 50;
 
+// Suffixes browsers and download managers give a file while it is still
+// being written. Firefox writes `.part`, Chromium `.crdownload`, Edge
+// `.download`, Opera `.opdownload`, aria2 `.aria2`, wget/curl-style
+// tooling `.partial`. A file wearing one of these is not a real document
+// yet — it must not become the face of the dock's preview pile, and it is
+// what tells us a download is in flight (see dockFolderIcon.js).
+const PARTIAL_DOWNLOAD_SUFFIXES = [
+    '.part', '.crdownload', '.download', '.opdownload', '.partial', '.aria2',
+];
+
+export function isPartialDownload(name) {
+    const lower = name.toLowerCase();
+    return PARTIAL_DOWNLOAD_SUFFIXES.some(suffix => lower.endsWith(suffix));
+}
+
+/**
+ * Strips the in-progress suffix so a download in flight is listed under
+ * the name it will actually have when it lands.
+ */
+export function finalDownloadName(name) {
+    const lower = name.toLowerCase();
+    for (const suffix of PARTIAL_DOWNLOAD_SUFFIXES) {
+        if (lower.endsWith(suffix))
+            return name.slice(0, -suffix.length);
+    }
+    return name;
+}
+
 function toEntry(enumerator, info) {
     const child = enumerator.get_child(info);
+    const name = info.get_display_name();
+    const partial = isPartialDownload(name);
+    // Seconds, not the GLib.DateTime object: this is only ever compared,
+    // and get_attribute_uint64 avoids allocating a DateTime per file on a
+    // path that runs for every entry of every folder on every refresh.
+    const created = info.get_attribute_uint64('time::created');
+    const modified = info.get_attribute_uint64('time::modified');
     return {
-        name: info.get_display_name(),
+        name: partial ? finalDownloadName(name) : name,
         gicon: info.get_icon(),
         contentType: info.get_content_type(),
         uri: child.get_uri(),
+        path: child.get_path(),
+        size: info.get_size(),
         isDirectory: info.get_file_type() === Gio.FileType.DIRECTORY,
         thumbnailPath: info.get_attribute_byte_string('thumbnail::path'),
         thumbnailValid: info.get_attribute_boolean('thumbnail::is-valid'),
+        partial,
+        time: created || modified || 0,
     };
+}
+
+/**
+ * Newest first, the way a macOS stack sorts by Date Added — so the front
+ * of the dock icon's preview pile is always the file that just arrived,
+ * and the opened stack lists it first. Name is only the tiebreaker for
+ * files sharing a timestamp (a batch copy, or a filesystem with
+ * second-granularity times).
+ *
+ * Downloads still in flight sort *after* everything else regardless of
+ * their time: a half-written `.part` is the newest thing in the folder by
+ * a wide margin, and letting it take the front of the pile would replace
+ * the icon with a generic "unknown file" glyph for the whole download.
+ */
+export function sortEntries(entries) {
+    return entries.sort((a, b) => {
+        if (a.partial !== b.partial)
+            return a.partial ? 1 : -1;
+        if (a.time !== b.time)
+            return b.time - a.time;
+        return a.name.localeCompare(b.name);
+    });
 }
 
 export function listDirectory(path, callback) {
@@ -103,8 +179,7 @@ export function listDirectory(path, callback) {
 
                     if (infos.length === 0) {
                         enumerator.close_async(GLib.PRIORITY_DEFAULT, null, () => {});
-                        entries.sort((a, b) => a.name.localeCompare(b.name));
-                        callback(entries);
+                        callback(sortEntries(entries));
                         return;
                     }
 

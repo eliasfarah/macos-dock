@@ -32,6 +32,7 @@ export class StackSettings {
     get dockMagnificationAmount() { return this._gsettings.get_double('dock-magnification-amount'); }
     get dockMagnificationRange() { return this._gsettings.get_int('dock-magnification-range'); }
     get dockMinimizeEffect() { return this._gsettings.get_string('dock-minimize-effect'); }
+    get appearance() { return this._gsettings.get_string('appearance'); }
 
     getStacks() {
         const raw = this._gsettings.get_string(STACKS_KEY);

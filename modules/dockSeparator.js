@@ -18,12 +18,21 @@ export const SEPARATOR_MARGIN = 4;
 export const SEPARATOR_TOTAL_WIDTH = SEPARATOR_LINE_WIDTH + SEPARATOR_MARGIN * 2;
 
 export function createDockSeparator() {
+    // Centred, not stretched: Apple's Dock draws these as short hairlines
+    // sitting inside the bar's padding, at roughly 60% of its height.
+    // y_expand + FILL made them full-height rules from glass edge to glass
+    // edge, which is a GNOME panel's idiom, not the Dock's.
     const separator = new St.Widget({
         style_class: 'macos-dock-separator',
         width: SEPARATOR_LINE_WIDTH,
-        y_expand: true,
-        y_align: Clutter.ActorAlign.FILL,
+        y_expand: false,
+        y_align: Clutter.ActorAlign.CENTER,
     });
     separator.set_style(`margin-left: ${SEPARATOR_MARGIN}px; margin-right: ${SEPARATOR_MARGIN}px;`);
     return separator;
+}
+
+/** Height comes from the bar's own metrics — see dockManager.js. */
+export function sizeDockSeparator(separator, height) {
+    separator?.set_height(height);
 }

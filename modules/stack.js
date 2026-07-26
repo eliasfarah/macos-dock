@@ -18,6 +18,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { SPRING, animateSpring, animateStagger, cancelSpring } from './animations.js';
 import { createGlassPanel, createShadowActor } from './glass.js';
 import { listDirectory, launchUri, clamp, iconForEntry } from './utils.js';
+import { AppearanceManager, applyAppearanceClass } from './appearance.js';
 
 const ITEM_WIDTH = 84;
 const ITEM_HEIGHT = 92;
@@ -38,11 +39,25 @@ const LIST_MARGIN = 8;
 // thing.
 const FAN_ICON_SIZE = 56;
 const FAN_ROW_HEIGHT = 68; // vertical distance between consecutive items
-const FAN_ARC = 26; // how far the column drifts sideways from bottom to top
-const FAN_MAX_ROTATION = 4; // degrees, at the top of the arc
+// Measured off the reference macOS shot (four folders plus the Open in
+// Finder cap): the icon column drifts sideways by about 0.16 of an icon's
+// width over the whole climb — roughly 9px against 28px icons — and it
+// drifts *outward*, away from the middle of the screen. Ours drifted by
+// nearly half an icon width, and the wrong way, which is what made the
+// column read as crooked rather than as a fan.
+const FAN_ARC = Math.round(FAN_ICON_SIZE * 0.16);
+// macOS keeps the icons and their name plates upright: the arc is in the
+// path the column takes, not in the items themselves. Ours tilted every
+// row progressively, so thumbnails came out visibly skewed and the text
+// plates sat at an angle — which is most of what looked "esquisito".
 const FAN_MIN_WIDTH = 200; // floor for the name plates near a screen edge
 const FAN_LABEL_GAP = 10; // must match .macos-stack-fan-box's spacing
 const FAN_GAP = 8; // clearance between the dock icon and the first fan item
+// The "Open in Finder" cap is drawn distinctly smaller than the file icons
+// under it — about 60% of their size in the reference shot. Ours matched
+// them exactly, so it read as a big grey disc dominating the top of the
+// fan instead of as a small badge finishing it off.
+const FAN_FINDER_SIZE = Math.round(FAN_ICON_SIZE * 0.6);
 const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
 const ARROW_SQUARE = 16; // side of the square that, rotated 45°, forms the pointer
@@ -54,9 +69,10 @@ const MAX_BLUR_RADIUS = 60;
 
 /** One configured folder-stack, bound to a dock icon on open(). */
 export class Stack {
-    constructor(config, settings) {
+    constructor(config, settings, appearance) {
         this.config = config; // { id, name, path, icon, mode }
         this._settings = settings;
+        this._appearance = appearance;
 
         this._panel = null;
         this._content = null;
@@ -270,7 +286,19 @@ export class Stack {
         } else if (mode === 'stack') { // list
             width = clamp(this._settings.panelSize, 180, workArea.width - PANEL_MARGIN * 2);
         } else { // fan
-            lean = origin.x >= workArea.x + workArea.width / 2 ? -1 : 1;
+            // The fan splays *outward*, away from the middle of the screen,
+            // the way a hand of cards held at the dock would — that is what
+            // the reference shot shows (its stack sits right of centre and
+            // the column drifts further right as it climbs). This used to
+            // lean the other way, toward the centre. Falls back to leaning
+            // inward when the outward side has no room, since running the
+            // top of the column off the screen edge would be worse than
+            // curving the "wrong" way.
+            const outward = origin.x >= workArea.x + workArea.width / 2 ? 1 : -1;
+            const roomOutward = outward > 0
+                ? (workArea.x + workArea.width - PANEL_MARGIN) - (origin.x + FAN_ICON_SIZE / 2)
+                : (origin.x - FAN_ICON_SIZE / 2) - (workArea.x + PANEL_MARGIN);
+            lean = roomOutward >= FAN_ARC ? outward : -outward;
             // Name plates always trail to the *left* of the column (as in the
             // reference shot), so the room they have is whatever lies between
             // the dock icon and the left edge of the work area. Near that
@@ -540,13 +568,21 @@ export class Stack {
             return;
         }
 
+        // The tint's *colour* has to follow the light/dark scheme, and
+        // because the opacity preference is applied here inline it cannot
+        // simply be left to the stylesheet the way the other layers are —
+        // an inline background-color wins over the cascade, so this one
+        // rule has to know about the scheme itself.
+        const scheme = this._appearance?.scheme ?? 'dark';
+        applyAppearanceClass(this._panel, scheme);
+        const base = scheme === 'light' ? '245, 246, 248' : '28, 28, 32';
         this._panel.set_style(`border-radius: ${CORNER_RADIUS}px;`);
         this._tint?.set_style(
-            `border-radius: ${CORNER_RADIUS}px; background-color: rgba(28, 28, 32, ${alpha.toFixed(2)});`);
+            `border-radius: ${CORNER_RADIUS}px; background-color: rgba(${base}, ${alpha.toFixed(2)});`);
         // The pointer is a separate actor from the tint layer, so it has
         // to be told the same colour or it would read as a differently
         // shaded tab stuck to the panel's edge.
-        this._arrowSquare?.set_style(`background-color: rgba(28, 28, 32, ${alpha.toFixed(2)});`);
+        this._arrowSquare?.set_style(`background-color: rgba(${base}, ${alpha.toFixed(2)});`);
     }
 
     /**
@@ -750,19 +786,30 @@ export class Stack {
 
         // The circular badge macOS uses for this row, rather than the
         // folder's own icon.
-        const badge = new St.Bin({
-            style_class: 'macos-stack-fan-finder',
+        // Centred inside a full-width bin so the badge, though smaller than
+        // the file icons below it, still sits on the same column axis they
+        // do rather than hugging the row's right edge.
+        const slot = new St.Bin({
             width: FAN_ICON_SIZE,
             height: FAN_ICON_SIZE,
             y_align: Clutter.ActorAlign.CENTER,
         });
+        const badge = new St.Bin({
+            style_class: 'macos-stack-fan-finder',
+            width: FAN_FINDER_SIZE,
+            height: FAN_FINDER_SIZE,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        badge.set_style(`border-radius: ${FAN_FINDER_SIZE}px;`);
         badge.set_child(new St.Icon({
             icon_name: 'go-next-symbolic',
-            icon_size: Math.round(FAN_ICON_SIZE / 2),
+            icon_size: Math.round(FAN_FINDER_SIZE * 0.55),
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         }));
-        box.add_child(badge);
+        slot.set_child(badge);
+        box.add_child(slot);
 
         button.set_child(box);
         button.connect('clicked', () => {
@@ -860,9 +907,10 @@ export class Stack {
     }
 
     /**
-     * Items stack upward from the dock icon, the column bending away from
-     * the nearer screen edge and tilting a little more the higher it
-     * climbs, with the "Open in Finder" row on top.
+     * Items stack upward from the dock icon, the column bending gently
+     * outward as it climbs, with the "Open in Finder" row on top. The rows
+     * themselves stay upright — in macOS the arc is in the path, not in the
+     * items.
      *
      * Rows are right-aligned and *resized* rather than shifted: their
      * right edge is the icon column, so setting each row's width sets
@@ -889,6 +937,10 @@ export class Stack {
             const rowWidth = geometry.anchor + geometry.lean * drift;
             row.set_size(rowWidth, FAN_ROW_HEIGHT);
             row.set_position(0, bottom - (index + 1) * FAN_ROW_HEIGHT);
+            // Explicitly flattened, not merely left unset: a row actor can
+            // be reused across opens, and a rotation left over from the
+            // previous layout would survive a plain resize.
+            row.rotation_angle_z = 0;
 
             if (row._fanLabel) {
                 // Measured unconstrained (a previous open may have pinned a
@@ -900,9 +952,6 @@ export class Stack {
                 row._fanLabel.set_width(
                     Math.max(48, Math.min(natural, rowWidth - FAN_ICON_SIZE - FAN_LABEL_GAP)));
             }
-
-            row.set_pivot_point(1, 0.5); // tilt about the icon end
-            row.rotation_angle_z = geometry.lean * FAN_MAX_ROTATION * t;
         });
     }
 
@@ -1071,6 +1120,12 @@ export class StackManager {
         this._stacks = new Map();
         this._active = null;
 
+        // Shared with every Stack this manager owns: a panel is built
+        // lazily on first open, so each one asks for the current scheme
+        // when it needs it rather than being told about changes it may
+        // not have actors for yet.
+        this._appearance = new AppearanceManager(settings);
+
         // A Stack now keeps its actors parked (not destroyed) between
         // opens for reuse, so if its folder is ever removed from
         // preferences it needs an explicit teardown here — otherwise
@@ -1084,7 +1139,7 @@ export class StackManager {
     toggle(config, iconActor) {
         let stack = this._stacks.get(config.id);
         if (!stack) {
-            stack = new Stack(config, this._settings);
+            stack = new Stack(config, this._settings, this._appearance);
             this._stacks.set(config.id, stack);
         }
 
@@ -1113,5 +1168,7 @@ export class StackManager {
             stack.forceClose();
         this._stacks.clear();
         this._active = null;
+        this._appearance?.destroy();
+        this._appearance = null;
     }
 }

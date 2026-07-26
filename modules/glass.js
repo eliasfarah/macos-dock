@@ -55,12 +55,27 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         x_expand: true, y_expand: true,
     });
 
+    // The two specular rims. macOS' Liquid Glass catches light along the
+    // *whole* outline, not just the top: sampling the reference dark-mode
+    // dock across its top edge gives backdrop 28 -> rim 53 -> interior 19,
+    // and across its bottom edge interior 10 -> rim 79 -> backdrop 12, so
+    // the lower edge is actually the brighter of the two. A single top
+    // sheen (which is all this used to draw) reads as a flat panel with a
+    // highlight stuck on it rather than as a piece of glass.
     const sheen = new St.Widget({
         style_class: `${variant}-sheen`,
         x_expand: true, y_expand: false,
         x_align: Clutter.ActorAlign.FILL,
         y_align: Clutter.ActorAlign.START,
         height: 46,
+    });
+
+    const underglow = new St.Widget({
+        style_class: `${variant}-underglow`,
+        x_expand: true, y_expand: false,
+        x_align: Clutter.ActorAlign.FILL,
+        y_align: Clutter.ActorAlign.END,
+        height: 22,
     });
 
     const content = new St.Widget({
@@ -77,14 +92,31 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
     panel.add_child(blur);
     panel.add_child(tint);
     panel.add_child(sheen);
+    panel.add_child(underglow);
     panel.add_child(content);
     panel.add_child(border);
+
+    // None of the decorative layers is reactive, which is enough to keep
+    // them out of the way of *clicks* — but not out of the way of drag and
+    // drop. ui/dnd.js resolves a drop target with
+    // `get_actor_at_pos(Clutter.PickMode.ALL, …)`, and PickMode.ALL ignores
+    // reactivity: `border` is added last, so it paints above `content` and
+    // covers the entire surface, and it was therefore the actor every drag
+    // over the dock picked. dnd.js walked up from it and found no
+    // `_delegate` willing to accept the drop, so every reorder was
+    // cancelled and snapped back. Decoration must be invisible to picking
+    // in every mode, not just to the reactive one.
+    for (const layer of [blur, tint, sheen, underglow, border])
+        Shell.util_set_hidden_from_pick(layer, true);
 
     // `background` is every purely decorative layer, exposed so a caller
     // can switch the whole glass surface off and keep only `content` —
     // the macOS Fan view draws no panel at all, its items float free
     // over the desktop.
-    const surface = { panel, content, blurEffect, tint, background: [blur, tint, sheen, border] };
+    const surface = {
+        panel, content, blurEffect, tint,
+        background: [blur, tint, sheen, underglow, border],
+    };
     applyPanelRadius(surface, cornerRadius);
     return surface;
 }
@@ -97,14 +129,20 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
  * or end up with a rounded bar wearing a square sheen.
  */
 export function applyPanelRadius({ panel, background }, cornerRadius) {
-    const [blur, tint, sheen, border] = background;
+    const [blur, tint, sheen, underglow, border] = background;
     panel.set_style(`border-radius: ${cornerRadius}px;`);
     blur.set_style(`border-radius: ${cornerRadius}px;`);
     tint.set_style(`border-radius: ${cornerRadius}px;`);
-    // Top corners only: the sheen is a highlight along the upper edge, so
-    // rounding its bottom would pull it away from the panel's sides.
+    // Top/bottom corners only: each rim is a highlight along one edge, so
+    // rounding its far side would pull it away from the panel's sides.
     sheen.set_style(`border-radius: ${cornerRadius}px ${cornerRadius}px 0 0;`);
+    underglow.set_style(`border-radius: 0 0 ${cornerRadius}px ${cornerRadius}px;`);
     border.set_style(`border-radius: ${cornerRadius}px;`);
+    // The rims are sized in proportion to the corner they have to sit
+    // inside: a fixed 46px sheen on a 50px-tall dock is not a highlight,
+    // it is a second background.
+    sheen.height = Math.max(6, Math.round(cornerRadius * 1.4));
+    underglow.height = Math.max(4, Math.round(cornerRadius * 0.9));
 }
 
 export function createShadowActor({ cornerRadius = 18 } = {}) {

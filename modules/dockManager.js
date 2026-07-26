@@ -20,17 +20,19 @@ import St from 'gi://St';
 import Shell from 'gi://Shell';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Mtk from 'gi://Mtk';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { createGlassPanel, applyPanelRadius } from './glass.js';
+import { AppearanceManager, applyAppearanceClass, blurBrightnessFor } from './appearance.js';
 import { clamp, getActorGeometry } from './utils.js';
 import { animateSpring, cancelSpring, SPRING } from './animations.js';
 import { DockAppIcon } from './dockAppIcon.js';
 import { DockFolderIcon } from './dockFolderIcon.js';
-import { createDockSeparator, SEPARATOR_TOTAL_WIDTH } from './dockSeparator.js';
+import { createDockSeparator, sizeDockSeparator, SEPARATOR_TOTAL_WIDTH } from './dockSeparator.js';
 import { DockTrashIcon } from './dockTrashIcon.js';
 import { DockShowAppsIcon } from './dockShowAppsIcon.js';
 
@@ -41,14 +43,30 @@ const DOCK_MIN_WIDTH = 120;
 // proportion to the icons. Ours were three fixed pixel constants, so the
 // bar only looked right at one setting — shrink the icons and it turned
 // into a thick slab with cavernous gaps, grow them and it read as a tight
-// strip with square-ish corners. These ratios are measured off the real
-// Dock; the clamps keep the extremes sane.
-const PADDING_RATIO = 0.14; // vertical breathing room above/below the icons
-const SPACING_RATIO = 0.14; // gap between icons, and at the row's two ends
-const RADIUS_RATIO = 0.30;
-const PADDING_RANGE = [7, 14];
-const SPACING_RANGE = [5, 12];
-const RADIUS_RANGE = [12, 26];
+// strip with square-ish corners.
+//
+// Re-measured against Apple's own Dock screenshots and a real Tahoe
+// desktop rather than estimated: in both, the bar stands about 0.19 of an
+// icon clear above and below the row, the icons sit about 0.16 of their
+// own width apart, and the corner radius is very nearly a third of the
+// bar's *height* — which is why the radius is derived from the height
+// below instead of from the icon size. The previous values gave a bar that
+// hugged the icons far too tightly and corners about 30% too tight with
+// it, which is most of why it read as a GNOME panel rather than a Dock.
+const PADDING_RATIO = 0.19; // vertical breathing room above/below the icons
+const SPACING_RATIO = 0.16; // gap between icons, and at the row's two ends
+const RADIUS_RATIO = 0.32; // of the bar's height, not of the icon size
+const PADDING_RANGE = [8, 22];
+const SPACING_RANGE = [6, 16];
+const RADIUS_RANGE = [12, 34];
+// The two dividers are short hairlines centred on the bar, not full-height
+// rules — Apple's screenshots put them at roughly 60% of the bar's height.
+const SEPARATOR_HEIGHT_RATIO = 0.6;
+// macOS' running dot is about a tenth of the icon it belongs to and sits
+// clear of it, down in the bar's lower padding, rather than tucked against
+// the icon's foot the way GNOME's app-grid dot is.
+const DOT_SIZE_RATIO = 0.1;
+const DOT_OFFSET_RATIO = 0.18;
 const MAX_BLUR_RADIUS = 60; // matches stack.js's own ceiling for the same setting
 const AUTOHIDE_TRIGGER_HEIGHT = 2; // reveal band pinned to the screen edge
 const UNPIN_DROP_MARGIN = 60; // how far past the dock a drop must land to unpin
@@ -111,6 +129,13 @@ export class DockManager {
     }
 
     disable() {
+        // Set before anything else: teardown must not start animations on
+        // actors it is about to destroy. _resetMagnification() did exactly
+        // that, and the springs it launched kept writing scale/translation
+        // on icons that disable() had already destroyed a few lines later
+        // — about thirty `Gjs-CRITICAL: has been already disposed` lines
+        // per teardown, visible only with --debug-control.
+        this._tearingDown = true;
         this._restoreNativeDash();
         this._disableMagnification();
         this._disconnectSignals();
@@ -155,6 +180,13 @@ export class DockManager {
         // driven by an open/close spring.
         blurEffect.radius = (this._settings.blurIntensity / 100) * MAX_BLUR_RADIUS;
 
+        // Light/dark/follow-the-system. The palette itself lives in the
+        // stylesheet, selected by a marker class on this root actor —
+        // St has no media queries, so this is what stands in for one.
+        this._appearance = new AppearanceManager(this._settings);
+        this._appearanceListener = this._appearance.connect(() => this._applyAppearance());
+        this._applyAppearance();
+
         // The macOS Dock has exactly TWO sections and therefore exactly
         // ONE divider: applications on the left (Finder, Launchpad, then
         // everything else), and stacks plus the Trash on the right. Ours
@@ -174,7 +206,7 @@ export class DockManager {
         });
         this._content.add_child(this._iconBox);
 
-        this._showAppsIcon = new DockShowAppsIcon(this._settings.dockIconSize);
+        this._showAppsIcon = this._watchIconLifetime(new DockShowAppsIcon(this._settings.dockIconSize));
         this._showAppsIcon.set_pivot_point(0.5, 1); // grow upward from the dock's baseline
         this._appsBox = new St.BoxLayout({ vertical: false });
         this._stacksBox = new St.BoxLayout({ vertical: false });
@@ -182,7 +214,7 @@ export class DockManager {
         // appsBox and is repositioned/hidden by _redisplayApps.
         this._sepRunning = createDockSeparator();
         this._appsBox.add_child(this._sepRunning);
-        this._trashIcon = new DockTrashIcon(this._settings.dockIconSize);
+        this._trashIcon = this._watchIconLifetime(new DockTrashIcon(this._settings.dockIconSize));
         this._trashIcon.set_pivot_point(0.5, 1); // grow upward from the dock's baseline
 
         this._trackTooltip(this._showAppsIcon, () => 'Aplicativos');
@@ -212,7 +244,26 @@ export class DockManager {
         // (see _layoutDock/_updateStrutTracking) purely to reserve the
         // space; it never paints and is reactive:false so it can never
         // intercept a click.
+        //
+        // reactive:false is NOT enough on its own, and this was the whole
+        // reason drag-to-reorder never worked. Clicks are routed by
+        // reactive picking, which does skip this actor — but ui/dnd.js
+        // resolves a drop target with
+        // `get_actor_at_pos(Clutter.PickMode.ALL, …)`, and PickMode.ALL
+        // ignores reactivity entirely. This actor spans the full monitor
+        // width down to the screen edge (so it covers the whole dock) and
+        // is added to the chrome *after* the dock, so it paints above it
+        // and won every DnD pick. dnd.js then walked up from it — through
+        // Main.layoutManager's chrome group, which has no `_delegate` —
+        // found nothing that would accept the drop, and cancelled the
+        // drag. Measured: a synthetic drag emitted 'drag-begin' correctly
+        // and then always 'drag-cancelled', with the actor picked at an
+        // app icon's own centre coming back as a bare ClutterActor that
+        // the icon did not contain. Hidden from picking outright, since a
+        // pure geometry placeholder should never be the answer to "what is
+        // under the pointer" in any pick mode.
         this._strutActor = new Clutter.Actor({ opacity: 0, reactive: false });
+        Shell.util_set_hidden_from_pick(this._strutActor, true);
 
         Main.layoutManager.addChrome(this._dockActor, {
             affectsStruts: false,
@@ -362,6 +413,13 @@ export class DockManager {
         // the pointer arriving.
         this._autohideStrip = new Clutter.Actor({ reactive: true, opacity: 0 });
         Main.layoutManager.addChrome(this._autohideStrip);
+        // Must stay reactive (that is how it notices the pointer), so it
+        // cannot be hidden from picking the way the strut actor is — and a
+        // revealed dock overlaps this band. Lowered below the dock instead,
+        // so wherever the two overlap the dock is what a pick returns and
+        // dragging an icon near the screen's bottom edge still finds a drop
+        // target. Same failure mode as the strut actor above, different fix.
+        Main.layoutManager.uiGroup.set_child_below_sibling(this._autohideStrip, this._dockActor);
         this._autohideStrip.connect('enter-event', () => {
             this._revealDock();
             return Clutter.EVENT_PROPAGATE;
@@ -488,6 +546,10 @@ export class DockManager {
         this._cancelScheduledHide();
         this._destroyAutohideStrip();
 
+        this._appearance?.destroy();
+        this._appearance = null;
+        this._appearanceListener = null;
+
         this._tooltip?.destroy();
         this._tooltip = null;
         this._tooltipIcon = null;
@@ -516,14 +578,37 @@ export class DockManager {
         this._showAppsIcon = null;
     }
 
+    /**
+     * The dock's own surface follows the scheme; so does the blur, because
+     * macOS' light glass lifts the wallpaper behind it and its dark glass
+     * pushes it down, and `brightness` is the only knob Shell.BlurEffect
+     * gives us for that.
+     */
+    _applyAppearance() {
+        const scheme = this._appearance?.scheme ?? 'dark';
+        applyAppearanceClass(this._dockActor, scheme);
+        if (this._blurEffect)
+            this._blurEffect.brightness = blurBrightnessFor(scheme);
+    }
+
+    get appearanceScheme() {
+        return this._appearance?.scheme ?? 'dark';
+    }
+
     /** Every proportional measurement of the bar, derived from icon size. */
     _dockMetrics() {
         const iconSize = this._settings.dockIconSize;
+        const padding = clamp(Math.round(iconSize * PADDING_RATIO), ...PADDING_RANGE);
+        const height = iconSize + padding * 2;
         return {
             iconSize,
-            padding: clamp(Math.round(iconSize * PADDING_RATIO), ...PADDING_RANGE),
+            padding,
+            height,
             spacing: clamp(Math.round(iconSize * SPACING_RATIO), ...SPACING_RANGE),
-            radius: clamp(Math.round(iconSize * RADIUS_RATIO), ...RADIUS_RANGE),
+            radius: clamp(Math.round(height * RADIUS_RATIO), ...RADIUS_RANGE),
+            separatorHeight: Math.round(height * SEPARATOR_HEIGHT_RATIO),
+            dotSize: Math.max(3, Math.round(iconSize * DOT_SIZE_RATIO)),
+            dotOffset: Math.max(2, Math.round(iconSize * DOT_OFFSET_RATIO)),
         };
     }
 
@@ -552,6 +637,21 @@ export class DockManager {
             this._appsBox.visible = this._appIcons.size > 0;
         if (this._stacksBox)
             this._stacksBox.visible = this._stackIcons.size > 0;
+
+        for (const separator of [this._sepRunning, this._sepTrailing])
+            sizeDockSeparator(separator, metrics.separatorHeight);
+
+        // The running dot's size and offset are per-icon-size values that
+        // St's CSS cannot express, so they are pushed inline. Only the
+        // colour stays in the stylesheet, because that one flips with the
+        // light/dark scheme. AppIcon reads `offset-y` back through its own
+        // theme node (see _updateDotStyle in GNOME's appDisplay.js) and
+        // applies it as a translation, so it has to stay inside the bar's
+        // lower padding or the dot lands off the glass.
+        const dotStyle = `height: ${metrics.dotSize}px; width: ${metrics.dotSize}px;` +
+            ` border-radius: ${metrics.dotSize}px; offset-y: ${metrics.dotOffset}px;`;
+        for (const icon of this._appIcons.values())
+            icon.setDotStyle(dotStyle);
 
         if (this._surface)
             applyPanelRadius(this._surface, metrics.radius);
@@ -609,7 +709,7 @@ export class DockManager {
         // layers all expand with no intrinsic size, so that max collapses
         // far below what the icon row needs.)
         const width = clamp(this._naturalRowWidth(metrics), DOCK_MIN_WIDTH, workArea.width - margin * 2);
-        const height = metrics.iconSize + metrics.padding * 2;
+        const height = metrics.height;
 
         const x = workArea.x + (workArea.width - width) / 2;
 
@@ -739,6 +839,34 @@ export class DockManager {
         return icon ? getActorGeometry(icon) : null;
     }
 
+    /**
+     * Tells each window where its own dock icon is. GNOME's stock minimize
+     * animation reads exactly this (`actor.meta_window.get_icon_geometry()`
+     * in windowManager.js's _minimizeWindow) to decide what to shrink the
+     * window toward, and falls back to a corner of the monitor when no one
+     * has set it — which is why windows used to collapse toward the screen
+     * edge rather than into the dock whenever the genie effect was off.
+     * Re-published on every redisplay and every layout change, because the
+     * icons move whenever the row's contents or the bar's size change.
+     */
+    _publishIconGeometries() {
+        for (const window of global.display.list_all_windows()) {
+            const icon = this._iconForWindow(window);
+            if (!icon?.get_stage())
+                continue;
+            const { x, y, width, height } = getActorGeometry(icon);
+            // Mtk.Rectangle, not Meta.Rectangle: the rect type moved out of
+            // Meta into the Mtk namespace in this Mutter (verified against
+            // the installed typelib — Meta.Rectangle is undefined here).
+            window.set_icon_geometry(new Mtk.Rectangle({
+                x: Math.round(x),
+                y: Math.round(y),
+                width: Math.round(width),
+                height: Math.round(height),
+            }));
+        }
+    }
+
     _disconnectSignals() {
         for (const { object, id } of this._objectSignals)
             object.disconnect(id);
@@ -767,6 +895,9 @@ export class DockManager {
             break;
         case 'dock-edge-margin':
             this._layoutDock();
+            break;
+        case 'appearance':
+            this._appearance?.refresh();
             break;
         case 'dock-autohide':
             this._updateStrutTracking();
@@ -813,6 +944,7 @@ export class DockManager {
         this._redisplayApps();
         this._redisplayStacks();
         this._layoutDock();
+        this._publishIconGeometries();
     }
 
     _redisplayApps() {
@@ -838,7 +970,7 @@ export class DockManager {
             const appId = app.get_id();
             let icon = this._appIcons.get(appId);
             if (!icon) {
-                icon = new DockAppIcon(app);
+                icon = this._watchIconLifetime(new DockAppIcon(app));
                 icon.icon.setIconSize(iconSize);
                 icon.set_pivot_point(0.5, 1); // grow upward from the dock's baseline
                 this._appIcons.set(appId, icon);
@@ -882,7 +1014,7 @@ export class DockManager {
         configs.forEach((config, index) => {
             let icon = this._stackIcons.get(config.id);
             if (!icon) {
-                icon = new DockFolderIcon(config, iconSize, this._onActivateFolder);
+                icon = this._watchIconLifetime(new DockFolderIcon(config, iconSize, this._onActivateFolder));
                 icon.set_pivot_point(0.5, 1); // grow upward from the dock's baseline
                 this._stackIcons.set(config.id, icon);
                 this._stacksBox.insert_child_at_index(icon, index);
@@ -935,6 +1067,20 @@ export class DockManager {
             this._resetMagnification();
     }
 
+    /**
+     * Every icon the magnification may touch, minus the ones that are on
+     * their way out.
+     *
+     * The `_gone` filter is not defensive padding. Tearing the shell down
+     * destroys our chrome, and removing `_iconBox` from the scene graph
+     * makes Clutter emit one last 'leave-event' on it — which lands in the
+     * magnification handler and reads `icon.scale_x` off actors whose
+     * GObjects are already disposed. That produced a stack-traced
+     * `Gjs-CRITICAL` per icon on every logout, plus a Clutter-WARNING for
+     * each spring that then tried to start on a stage-less actor. Holding a
+     * JS reference is no evidence the underlying object is still alive; the
+     * actor's own 'destroy' signal, which fires while it still is, is.
+     */
     _magnifiableIcons() {
         const icons = [];
         if (this._showAppsIcon)
@@ -942,7 +1088,14 @@ export class DockManager {
         icons.push(...this._appIcons.values(), ...this._stackIcons.values());
         if (this._trashIcon)
             icons.push(this._trashIcon);
-        return icons;
+        return icons.filter(icon => !icon._gone);
+    }
+
+    _watchIconLifetime(icon) {
+        icon.connect('destroy', () => {
+            icon._gone = true;
+        });
+        return icon;
     }
 
     _updateMagnification(event) {
@@ -1074,12 +1227,20 @@ export class DockManager {
         for (const icon of this._magnifiableIcons()) {
             icon._magnifyTarget = 1;
             icon._magnifyTranslation = 0;
+            if (this._tearingDown) {
+                // Snap, don't spring: these actors are about to be
+                // destroyed and an in-flight animation would outlive them.
+                cancelSpring(icon);
+                icon.set({ scale_x: 1, scale_y: 1, translation_x: 0 });
+                continue;
+            }
             animateSpring(icon,
                 { scale_x: icon.scale_x, scale_y: icon.scale_y, translation_x: icon.translation_x },
                 { scale_x: 1, scale_y: 1, translation_x: 0 },
                 { duration: 200, preset: SPRING.MAGNIFY, id: 'magnify' });
         }
-        this._applyDockWidth(this._dockBaseWidth);
+        if (!this._tearingDown)
+            this._applyDockWidth(this._dockBaseWidth);
     }
 
     // -- drag to reorder / pin / unpin ---------------------------------------

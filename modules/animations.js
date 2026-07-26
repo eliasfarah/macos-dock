@@ -140,6 +140,24 @@ export function animateSpring(target, fromProps, toProps, options = {}) {
     if (!target._springTimelines)
         target._springTimelines = new Map();
     target._springTimelines.set(id, timeline);
+
+    // A spring outlives its target unless something stops it: the timeline
+    // is bound to `actor` for its frame clock, but nothing tells it that
+    // `target` has gone away, so every subsequent frame writes a property
+    // on a disposed GObject. Measured on extension disable: ~30
+    // `Gjs-CRITICAL: has been already disposed` lines per teardown, from
+    // the magnification reset animating icons that disable() destroys a
+    // moment later. Guarding here rather than at each call site, because
+    // every caller has the same exposure and the ones that already cancel
+    // by hand only cover the paths they thought of.
+    if (target instanceof Clutter.Actor && !target._springDestroyId) {
+        target._springDestroyId = target.connect('destroy', () => {
+            for (const running of target._springTimelines?.values() ?? [])
+                running.stop();
+            target._springTimelines?.clear();
+        });
+    }
+
     timeline.start();
     return timeline;
 }

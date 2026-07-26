@@ -124,6 +124,17 @@
       <description>Raio, em pixels, de influência do cursor sobre o tamanho dos ícones vizinhos.</description>
     </key>
 
+    <key name="appearance" type="s">
+      <choices>
+        <choice value="system"/>
+        <choice value="light"/>
+        <choice value="dark"/>
+      </choices>
+      <default>"system"</default>
+      <summary>Aparência</summary>
+      <description>Esquema de cores do vidro da dock e do painel: claro, escuro, ou acompanhando a preferência do sistema (org.gnome.desktop.interface color-scheme).</description>
+    </key>
+
     <key name="dock-minimize-effect" type="s">
       <choices>
         <choice value="genie"/>
