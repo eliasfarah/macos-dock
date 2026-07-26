@@ -62,20 +62,25 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
     // the lower edge is actually the brighter of the two. A single top
     // sheen (which is all this used to draw) reads as a flat panel with a
     // highlight stuck on it rather than as a piece of glass.
+    // Both are full-size and paint nothing but a one-pixel inset line, so
+    // they trace the rounded rectangle exactly. They used to be fixed-height
+    // *bands* — a 46px gradient anchored to the top, a size chosen for the
+    // 300px-tall Stack panel. On a 50-88px dock bar that covered more than
+    // half the surface and its upper edge drew a hard horizontal line
+    // straight across the dock: measured on a real screenshot, a step of
+    // +30 levels at the band's top, and it read as a thick stripe rather
+    // than as a highlight. The vertical shading belongs to the tint's own
+    // full-height gradient; these two are only the rims.
+    // (Two actors rather than two shadows on one, because St's box-shadow
+    // takes a single shadow per rule.)
     const sheen = new St.Widget({
         style_class: `${variant}-sheen`,
-        x_expand: true, y_expand: false,
-        x_align: Clutter.ActorAlign.FILL,
-        y_align: Clutter.ActorAlign.START,
-        height: 46,
+        x_expand: true, y_expand: true,
     });
 
     const underglow = new St.Widget({
         style_class: `${variant}-underglow`,
-        x_expand: true, y_expand: false,
-        x_align: Clutter.ActorAlign.FILL,
-        y_align: Clutter.ActorAlign.END,
-        height: 22,
+        x_expand: true, y_expand: true,
     });
 
     const content = new St.Widget({
@@ -133,16 +138,13 @@ export function applyPanelRadius({ panel, background }, cornerRadius) {
     panel.set_style(`border-radius: ${cornerRadius}px;`);
     blur.set_style(`border-radius: ${cornerRadius}px;`);
     tint.set_style(`border-radius: ${cornerRadius}px;`);
-    // Top/bottom corners only: each rim is a highlight along one edge, so
-    // rounding its far side would pull it away from the panel's sides.
-    sheen.set_style(`border-radius: ${cornerRadius}px ${cornerRadius}px 0 0;`);
-    underglow.set_style(`border-radius: 0 0 ${cornerRadius}px ${cornerRadius}px;`);
+    // The rims carry the panel's full radius: each is a full-size actor
+    // whose only paint is a one-pixel inset line, so the radius is what
+    // makes that line follow the rounded corners instead of cutting across
+    // them.
+    sheen.set_style(`border-radius: ${cornerRadius}px;`);
+    underglow.set_style(`border-radius: ${cornerRadius}px;`);
     border.set_style(`border-radius: ${cornerRadius}px;`);
-    // The rims are sized in proportion to the corner they have to sit
-    // inside: a fixed 46px sheen on a 50px-tall dock is not a highlight,
-    // it is a second background.
-    sheen.height = Math.max(6, Math.round(cornerRadius * 1.4));
-    underglow.height = Math.max(4, Math.round(cornerRadius * 0.9));
 }
 
 export function createShadowActor({ cornerRadius = 18 } = {}) {

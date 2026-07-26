@@ -28,6 +28,16 @@
  *   about a third, and the lower rim is the brighter of the two — which
  *   is why glass.js draws an underglow as well as a sheen.
  *
+ * Note what those profiles do NOT contain: a broad bright band. The rim
+ * is one pixel and the interior shades smoothly from top to bottom. So
+ * the sheen and the underglow are full-size actors painting nothing but a
+ * single inset line each, and all the vertical shading lives in the
+ * tint's own gradient. They used to be fixed-height gradient bands (46px
+ * and 22px), sized for the 300px-tall Stack panel and inherited by a
+ * 50-88px dock bar, where the sheen covered more than half the surface
+ * and its upper edge cut a hard horizontal line across the whole dock —
+ * measured on a real screenshot as a step of +30 levels.
+ *
  * The tints are intentionally low-alpha in both schemes: the blur behind
  * them is the whole point, and an opaque fill flattens it into a plain
  * slab.
@@ -52,7 +62,7 @@
 /* -- stack panel: dark --------------------------------------------- */
 
 .macos-stack-panel.macos-appearance-dark {
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: none;
 }
 
 .macos-stack-panel.macos-appearance-dark .macos-stack-panel-tint {
@@ -62,26 +72,21 @@
 }
 
 .macos-stack-panel.macos-appearance-dark .macos-stack-panel-sheen {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0.16);
-  background-gradient-end: rgba(255, 255, 255, 0);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.22) inset;
 }
 
 .macos-stack-panel.macos-appearance-dark .macos-stack-panel-underglow {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0);
-  background-gradient-end: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 -1px 0 0 rgba(255, 255, 255, 0.28) inset;
 }
 
 .macos-stack-panel.macos-appearance-dark .macos-stack-panel-border {
   border: 1px solid rgba(255, 255, 255, 0.22);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.26) inset;
 }
 
 /* -- stack panel: light -------------------------------------------- */
 
 .macos-stack-panel.macos-appearance-light {
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  border: none;
 }
 
 .macos-stack-panel.macos-appearance-light .macos-stack-panel-tint {
@@ -91,20 +96,15 @@
 }
 
 .macos-stack-panel.macos-appearance-light .macos-stack-panel-sheen {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0.4);
-  background-gradient-end: rgba(255, 255, 255, 0);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.85) inset;
 }
 
 .macos-stack-panel.macos-appearance-light .macos-stack-panel-underglow {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0);
-  background-gradient-end: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 -1px 0 0 rgba(255, 255, 255, 0.6) inset;
 }
 
 .macos-stack-panel.macos-appearance-light .macos-stack-panel-border {
   border: 1px solid rgba(255, 255, 255, 0.7);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.85) inset;
 }
 
 /* -- dock bar: shared structure ------------------------------------ */
@@ -116,7 +116,7 @@
 /* -- dock bar: dark ------------------------------------------------- */
 
 .macos-dock-panel.macos-appearance-dark {
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: none;
 }
 
 .macos-dock-panel.macos-appearance-dark .macos-dock-panel-tint {
@@ -126,20 +126,15 @@
 }
 
 .macos-dock-panel.macos-appearance-dark .macos-dock-panel-sheen {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0.14);
-  background-gradient-end: rgba(255, 255, 255, 0);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.16) inset;
 }
 
 .macos-dock-panel.macos-appearance-dark .macos-dock-panel-underglow {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0);
-  background-gradient-end: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 -1px 0 0 rgba(255, 255, 255, 0.3) inset;
 }
 
 .macos-dock-panel.macos-appearance-dark .macos-dock-panel-border {
   border: 1px solid rgba(255, 255, 255, 0.26);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.16) inset;
 }
 
 .macos-dock-panel.macos-appearance-dark .macos-dock-separator {
@@ -158,7 +153,7 @@
 /* -- dock bar: light ------------------------------------------------ */
 
 .macos-dock-panel.macos-appearance-light {
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  border: none;
 }
 
 .macos-dock-panel.macos-appearance-light .macos-dock-panel-tint {
@@ -168,20 +163,15 @@
 }
 
 .macos-dock-panel.macos-appearance-light .macos-dock-panel-sheen {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0.34);
-  background-gradient-end: rgba(255, 255, 255, 0);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.8) inset;
 }
 
 .macos-dock-panel.macos-appearance-light .macos-dock-panel-underglow {
-  background-gradient-direction: vertical;
-  background-gradient-start: rgba(255, 255, 255, 0);
-  background-gradient-end: rgba(255, 255, 255, 0.24);
+  box-shadow: 0 -1px 0 0 rgba(255, 255, 255, 0.55) inset;
 }
 
 .macos-dock-panel.macos-appearance-light .macos-dock-panel-border {
   border: 1px solid rgba(255, 255, 255, 0.62);
-  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.8) inset;
 }
 
 .macos-dock-panel.macos-appearance-light .macos-dock-separator {
