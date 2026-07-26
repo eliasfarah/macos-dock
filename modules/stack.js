@@ -17,7 +17,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { SPRING, animateSpring, animateStagger, cancelSpring } from './animations.js';
 import { createGlassPanel, createShadowActor } from './glass.js';
-import { listDirectory, launchUri, clamp } from './utils.js';
+import { listDirectory, launchUri, clamp, iconForEntry } from './utils.js';
 
 const ITEM_WIDTH = 84;
 const ITEM_HEIGHT = 92;
@@ -37,10 +37,12 @@ const LIST_MARGIN = 8;
 // *inside* the glass rectangle, which is why it never read as the real
 // thing.
 const FAN_ICON_SIZE = 56;
-const FAN_ROW_HEIGHT = 74; // vertical distance between consecutive items
-const FAN_ARC = 22; // how far the column drifts sideways from bottom to top
-const FAN_MAX_ROTATION = 3; // degrees, at the top of the arc
-const FAN_MARGIN = 10;
+const FAN_ROW_HEIGHT = 68; // vertical distance between consecutive items
+const FAN_ARC = 26; // how far the column drifts sideways from bottom to top
+const FAN_MAX_ROTATION = 4; // degrees, at the top of the arc
+const FAN_MIN_WIDTH = 200; // floor for the name plates near a screen edge
+const FAN_LABEL_GAP = 10; // must match .macos-stack-fan-box's spacing
+const FAN_GAP = 8; // clearance between the dock icon and the first fan item
 const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
 const ARROW_SQUARE = 16; // side of the square that, rotated 45°, forms the pointer
@@ -208,7 +210,7 @@ export class Stack {
         const monitorIndex = Main.layoutManager.findIndexForActor(this._iconActor);
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
         // +1 for the "Open in Finder" row that caps the fan.
-        const rowsThatFit = Math.floor((workArea.height - ICON_GAP - FAN_MARGIN * 2) / FAN_ROW_HEIGHT) - 1;
+        const rowsThatFit = Math.floor((workArea.height - FAN_GAP - PANEL_MARGIN) / FAN_ROW_HEIGHT) - 1;
         return entryCount > Math.max(1, rowsThatFit) ? 'grid' : 'fan';
     }
 
@@ -247,13 +249,37 @@ export class Stack {
         }
 
         const gridWidth = effectiveColumns * ITEM_WIDTH + PANEL_MARGIN * 2;
+
+        // Fan geometry is driven by one anchor: the icon column has to sit
+        // directly above the dock icon the stack came from, with the name
+        // plates trailing off to its side. `anchor` is the distance from the
+        // container's left edge to that column's right edge; the container's
+        // x is then derived from it below rather than centred on the icon,
+        // which is what left the whole column about half a panel-width off
+        // to the right of its own dock icon.
+        //
+        // `lean` bends the column away from the nearer screen edge (macOS
+        // does the same), and is the only reason the container is ever wider
+        // than `anchor`: leaning right needs slack on the right for the drift.
+        let lean = 0;
+        let anchor = 0;
+
         let width;
-        if (mode === 'grid')
+        if (mode === 'grid') {
             width = clamp(gridWidth, ITEM_WIDTH + PANEL_MARGIN * 2, workArea.width - PANEL_MARGIN * 2);
-        else if (mode === 'stack') // list
+        } else if (mode === 'stack') { // list
             width = clamp(this._settings.panelSize, 180, workArea.width - PANEL_MARGIN * 2);
-        else // fan — wide enough for a name plate plus its icon
-            width = clamp(this._settings.panelSize, 260, workArea.width - PANEL_MARGIN * 2);
+        } else { // fan
+            lean = origin.x >= workArea.x + workArea.width / 2 ? -1 : 1;
+            // Name plates always trail to the *left* of the column (as in the
+            // reference shot), so the room they have is whatever lies between
+            // the dock icon and the left edge of the work area. Near that
+            // edge the plates simply get shorter rather than running off it.
+            const roomForPlates = origin.x + FAN_ICON_SIZE / 2 - (workArea.x + PANEL_MARGIN);
+            anchor = Math.round(clamp(this._settings.panelSize, FAN_MIN_WIDTH,
+                Math.max(FAN_MIN_WIDTH, roomForPlates)));
+            width = anchor + (lean > 0 ? FAN_ARC : 0);
+        }
 
         let height;
         let contentHeight;
@@ -273,28 +299,40 @@ export class Stack {
             // Fan: an invisible container just big enough to hold the
             // arc, one row per item plus the "Open in Finder" cap. It
             // never scrolls — _resolveMode() has already switched to Grid
-            // if the column wouldn't fit on screen.
+            // if the column wouldn't fit on screen. No margin: the bottom
+            // row has to sit right on the container's bottom edge so the
+            // fan visually grows out of the dock icon instead of floating
+            // a gap above it.
             const rows = this._entries.length + 1;
-            contentHeight = rows * FAN_ROW_HEIGHT + FAN_MARGIN * 2;
+            contentHeight = rows * FAN_ROW_HEIGHT;
             height = Math.min(contentHeight, workArea.height - PANEL_MARGIN);
         }
 
-        let x = clamp(origin.x - width / 2, workArea.x + PANEL_MARGIN, workArea.x + workArea.width - width - PANEL_MARGIN);
+        // Derived from the anchor in fan mode (see above), centred on the
+        // icon otherwise.
+        let x = mode === 'fan'
+            ? Math.round(origin.x + FAN_ICON_SIZE / 2 - anchor)
+            : origin.x - width / 2;
+        x = clamp(x, workArea.x + PANEL_MARGIN, workArea.x + workArea.width - width - PANEL_MARGIN);
+
+        // The fan draws no pointer, so it needs only a small breathing gap
+        // rather than the pointer's full height.
+        const gap = mode === 'fan' ? FAN_GAP : ICON_GAP;
 
         const spaceAbove = origin.iconTop - workArea.y;
         const spaceBelow = (workArea.y + workArea.height) - origin.iconBottom;
 
         let direction = this._settings.openDirection;
         if (direction === 'auto')
-            direction = (spaceAbove >= height + ICON_GAP || spaceAbove >= spaceBelow) ? 'up' : 'down';
+            direction = (spaceAbove >= height + gap || spaceAbove >= spaceBelow) ? 'up' : 'down';
 
         let y;
         if (direction === 'up')
-            y = Math.max(workArea.y + PANEL_MARGIN, origin.iconTop - height - ICON_GAP);
+            y = Math.max(workArea.y + PANEL_MARGIN, origin.iconTop - height - gap);
         else
-            y = Math.min(workArea.y + workArea.height - height - PANEL_MARGIN, origin.iconBottom + ICON_GAP);
+            y = Math.min(workArea.y + workArea.height - height - PANEL_MARGIN, origin.iconBottom + gap);
 
-        this._geometry = { x, y, width, height, direction, columns: effectiveColumns, contentHeight };
+        this._geometry = { x, y, width, height, direction, columns: effectiveColumns, contentHeight, anchor, lean };
         return this._geometry;
     }
 
@@ -492,6 +530,16 @@ export class Stack {
         // backdrop always stays visible through it, the way a real
         // Finder stack reads.
         const alpha = (clamp(this._settings.panelOpacity, 20, 100) / 100) * 0.6;
+
+        // The fan has no surface of its own. Hiding the decorative layers
+        // in _applyChromeForMode() is not enough on its own: the root panel
+        // actor carries `.macos-stack-panel`'s own 1px border, which is
+        // what still drew a hairline rectangle around the floating items.
+        if (this._mode === 'fan') {
+            this._panel.set_style('border: none; background: none;');
+            return;
+        }
+
         this._panel.set_style(`border-radius: ${CORNER_RADIUS}px;`);
         this._tint?.set_style(
             `border-radius: ${CORNER_RADIUS}px; background-color: rgba(28, 28, 32, ${alpha.toFixed(2)});`);
@@ -552,14 +600,7 @@ export class Stack {
     }
 
     _iconForEntry(entry) {
-        if (!entry.isDirectory && entry.thumbnailValid && entry.thumbnailPath) {
-            try {
-                return new Gio.FileIcon({ file: Gio.File.new_for_path(entry.thumbnailPath) });
-            } catch (error) {
-                // Fall through to the generic content-type icon below.
-            }
-        }
-        return entry.gicon;
+        return iconForEntry(entry);
     }
 
     _createItemActor(entry) {
@@ -643,12 +684,12 @@ export class Stack {
         label.clutter_text.set_line_wrap(false);
         label.clutter_text.set_ellipsize(Pango.EllipsizeMode.MIDDLE);
         box.add_child(label);
+        // _layoutFan caps this once the row's width is known — an
+        // unconstrained ellipsized St.Label reports its full natural width
+        // and would push the icon out of the column instead of truncating.
+        button._fanLabel = label;
 
-        box.add_child(new St.Icon({
-            gicon: this._iconForEntry(entry),
-            icon_size: FAN_ICON_SIZE,
-            y_align: Clutter.ActorAlign.CENTER,
-        }));
+        box.add_child(this._createFanIcon(this._iconForEntry(entry)));
 
         button.set_child(box);
         button.connect('clicked', () => {
@@ -656,6 +697,28 @@ export class Stack {
             this.closeStack();
         });
         return button;
+    }
+
+    /**
+     * A fan icon inside a fixed square. St.Icon treats `icon_size` as a
+     * bound on the longer side, so a portrait thumbnail (a screenshot, say)
+     * comes out narrower and taller than a square app icon — enough to
+     * break both the column's right edge and the row rhythm. The bin pins
+     * the footprint; the icon just centres inside it at its own aspect.
+     */
+    _createFanIcon(gicon) {
+        const bin = new St.Bin({
+            width: FAN_ICON_SIZE,
+            height: FAN_ICON_SIZE,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        bin.set_child(new St.Icon({
+            gicon,
+            icon_size: FAN_ICON_SIZE,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        return bin;
     }
 
     /** The "Open in Finder" cap that tops off a macOS fan. */
@@ -683,6 +746,7 @@ export class Stack {
         label.clutter_text.set_line_wrap(false);
         label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
         box.add_child(label);
+        button._fanLabel = label;
 
         // The circular badge macOS uses for this row, rather than the
         // folder's own icon.
@@ -690,6 +754,7 @@ export class Stack {
             style_class: 'macos-stack-fan-finder',
             width: FAN_ICON_SIZE,
             height: FAN_ICON_SIZE,
+            y_align: Clutter.ActorAlign.CENTER,
         });
         badge.set_child(new St.Icon({
             icon_name: 'go-next-symbolic',
@@ -795,26 +860,49 @@ export class Stack {
     }
 
     /**
-     * Items stack upward from the dock icon, the column drifting
-     * sideways and tilting a little more the higher it climbs, with the
-     * "Open in Finder" row on top. Rows are full width with their
-     * contents right-aligned, so shifting a row along the arc carries
-     * its icon and name plate together.
+     * Items stack upward from the dock icon, the column bending away from
+     * the nearer screen edge and tilting a little more the higher it
+     * climbs, with the "Open in Finder" row on top.
+     *
+     * Rows are right-aligned and *resized* rather than shifted: their
+     * right edge is the icon column, so setting each row's width sets
+     * where its icon lands. Shifting a full-width row along the arc
+     * instead (what this used to do) pushed the topmost icons past the
+     * container's own right edge, which is why the "Open in Finder" badge
+     * came out sliced in half.
      */
     _layoutFan(geometry) {
         const rows = [...this._items];
         if (this._finderButton)
             rows.push(this._finderButton);
 
+        const bottom = geometry.contentHeight;
         const lastIndex = Math.max(1, rows.length - 1);
+
         rows.forEach((row, index) => {
             const t = index / lastIndex; // 0 at the dock, 1 at the top
-            row.set_size(geometry.width, FAN_ROW_HEIGHT);
-            row.set_position(
-                Math.round(FAN_ARC * Math.sin(t * Math.PI / 2)),
-                Math.round(geometry.height - FAN_MARGIN - (index + 1) * FAN_ROW_HEIGHT));
-            row.set_pivot_point(1, 0.5); // rotate about the icon end
-            row.rotation_angle_z = -FAN_MAX_ROTATION * t;
+            // sin() rather than a straight ramp: the column leaves the dock
+            // icon vertically and only curves away as it climbs, so the
+            // bottom item still reads as sitting on its own icon.
+            const drift = Math.round(FAN_ARC * Math.sin(t * Math.PI / 2));
+
+            const rowWidth = geometry.anchor + geometry.lean * drift;
+            row.set_size(rowWidth, FAN_ROW_HEIGHT);
+            row.set_position(0, bottom - (index + 1) * FAN_ROW_HEIGHT);
+
+            if (row._fanLabel) {
+                // Measured unconstrained (a previous open may have pinned a
+                // width), then capped to whatever the row leaves beside the
+                // icon column so long names ellipsize instead of shoving the
+                // icon out of alignment.
+                row._fanLabel.set_width(-1);
+                const [, natural] = row._fanLabel.get_preferred_width(-1);
+                row._fanLabel.set_width(
+                    Math.max(48, Math.min(natural, rowWidth - FAN_ICON_SIZE - FAN_LABEL_GAP)));
+            }
+
+            row.set_pivot_point(1, 0.5); // tilt about the icon end
+            row.rotation_angle_z = geometry.lean * FAN_MAX_ROTATION * t;
         });
     }
 
@@ -855,6 +943,9 @@ export class Stack {
     }
 
     animateGlass() {
+        // No glass surface in fan mode — nothing to blur behind.
+        if (this._mode === 'fan')
+            return;
         const speed = this._settings.animationSpeed;
         const targetRadius = (this._settings.blurIntensity / 100) * MAX_BLUR_RADIUS;
         animateSpring(this._blurEffect, { radius: 0 }, { radius: targetRadius },
@@ -932,12 +1023,17 @@ export class Stack {
     destroyStack() {
         this._releaseInput();
 
+        // Looked up before removing, rather than removing inside a
+        // try/catch: an already-fired stagger timeout has self-removed, and
+        // g_source_remove() on a stale id *logs* "Source ID N was not found
+        // when attempting to remove it" as a GLib-CRITICAL and returns
+        // false — it never throws, so the catch below caught nothing and
+        // every close-while-animating spewed one critical per item.
+        const context = GLib.MainContext.default();
         for (const id of this._timeouts) {
-            try {
-                GLib.Source.remove(id);
-            } catch (error) {
-                // Already fired (and self-removed) — nothing to clean up.
-            }
+            const source = context.find_source_by_id(id);
+            if (source && !source.is_destroyed())
+                source.destroy();
         }
         this._timeouts = [];
 

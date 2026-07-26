@@ -118,6 +118,24 @@ export function listDirectory(path, callback) {
     );
 }
 
+/**
+ * The best available icon for a directory entry: its cached thumbnail when
+ * one exists (so photos and screenshots show themselves, the way a macOS
+ * stack does), otherwise the generic content-type icon GIO hands back.
+ * Shared by the opened stack's items and the dock icon's own preview pile
+ * so the two can never disagree about what a file looks like.
+ */
+export function iconForEntry(entry) {
+    if (!entry.isDirectory && entry.thumbnailValid && entry.thumbnailPath) {
+        try {
+            return new Gio.FileIcon({ file: Gio.File.new_for_path(entry.thumbnailPath) });
+        } catch (error) {
+            // Fall through to the generic content-type icon below.
+        }
+    }
+    return entry.gicon;
+}
+
 export function launchUri(uri) {
     try {
         Gio.AppInfo.launch_default_for_uri(uri, null);

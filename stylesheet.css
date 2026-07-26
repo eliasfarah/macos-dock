@@ -224,9 +224,13 @@
   background-color: transparent;
 }
 
+/* No padding: stack.js anchors the icon column on the row's right edge and
+ * derives the whole fan's x from it, so any horizontal padding here would
+ * shift the column off the dock icon it is supposed to sit above. The
+ * spacing must stay in step with FAN_LABEL_GAP. */
 .macos-stack-fan-box {
   spacing: 10px;
-  padding: 0 4px;
+  padding: 0;
 }
 
 .macos-stack-fan-label {
