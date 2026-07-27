@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>macOS Dock Stack for GNOME Shell 50 | True macOS Dock Experience on Linux</title>
+  <meta name="description" content="The ultimate macOS Tahoe dock experience for Linux GNOME Shell 50. Features real background blur, Gaussian magnification, Finder Stacks (Fan, Grid, List), Genie minimize effect, and live download indicators.">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-dark: #0a0c14;
+      --bg-card: rgba(22, 26, 43, 0.65);
+      --bg-card-hover: rgba(30, 36, 60, 0.85);
+      --border-color: rgba(255, 255, 255, 0.12);
+      --border-glow: rgba(120, 119, 198, 0.35);
+      --primary-accent: #6366f1;
+      --primary-gradient: linear-gradient(135deg, #a855f7 0%, #6366f1 50%, #3b82f6 100%);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --glass-blur: blur(24px);
+      --radius-xl: 24px;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+      --font-heading: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-body);
+      line-height: 1.6;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(168, 85, 247, 0.15) 0%, transparent 40%),
+        radial-gradient(circle at 85% 25%, rgba(99, 102, 241, 0.18) 0%, transparent 45%),
+        radial-gradient(circle at 50% 80%, rgba(59, 130, 246, 0.12) 0%, transparent 50%);
+      background-attachment: fixed;
+    }
+
+    /* Container */
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Navigation */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      background: rgba(10, 12, 20, 0.75);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--text-main);
+      font-family: var(--font-heading);
+      font-weight: 700;
+      font-size: 1.25rem;
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--primary-gradient);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+    }
+
+    .brand-icon svg {
+      width: 22px;
+      height: 22px;
+      fill: #fff;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    /* Language Switcher */
+    .lang-switcher {
+      position: relative;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      border-radius: 30px;
+      padding: 4px;
+      display: flex;
+      gap: 2px;
+    }
+
+    .lang-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 6px 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .lang-btn:hover {
+      color: #fff;
+    }
+
+    .lang-btn.active {
+      background: var(--primary-gradient);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+    }
+
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 30px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s ease;
+    }
+
+    .github-link:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.3);
+      transform: translateY(-1px);
+    }
+
+    /* Hero Section */
+    .hero {
+      padding: 80px 0 60px;
+      text-align: center;
+      position: relative;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(168, 85, 247, 0.15);
+      border: 1px solid rgba(168, 85, 247, 0.35);
+      color: #c084fc;
+      padding: 6px 16px;
+      border-radius: 30px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 24px;
+      letter-spacing: 0.02em;
+    }
+
+    .hero-title {
+      font-family: var(--font-heading);
+      font-size: 3.8rem;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 20px;
+      background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .hero-subtitle {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 720px;
+      margin: 0 auto 36px;
+      font-weight: 400;
+    }
+
+    .cta-group {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 50px;
+    }
+
+    .btn-primary {
+      background: var(--primary-gradient);
+      color: #fff;
+      padding: 14px 32px;
+      border-radius: 40px;
+      font-weight: 700;
+      font-size: 1.05rem;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 8px 25px rgba(99, 102, 241, 0.45);
+      transition: all 0.25 ease;
+      border: none;
+      cursor: pointer;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(99, 102, 241, 0.6);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      padding: 14px 28px;
+      border-radius: 40px;
+      font-weight: 600;
+      font-size: 1rem;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* Dock Showcase Container */
+    .showcase-window {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-xl);
+      padding: 12px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 40px rgba(99, 102, 241, 0.2);
+      backdrop-filter: var(--glass-blur);
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.3s ease, border-color 0.3s ease;
+    }
+
+    .showcase-window:hover {
+      border-color: var(--border-glow);
+    }
+
+    .window-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      margin-bottom: 12px;
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .dot-red { background: #ff5f56; }
+    .dot-yellow { background: #ffbd2e; }
+    .dot-green { background: #27c93f; }
+
+    .window-title {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .showcase-img {
+      width: 100%;
+      height: auto;
+      border-radius: var(--radius-lg);
+      display: block;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+
+    /* Features Section */
+    .features-section {
+      padding: 90px 0;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+
+    .section-title {
+      font-family: var(--font-heading);
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .section-desc {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 28px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      backdrop-filter: var(--glass-blur);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .feature-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-glow);
+      transform: translateY(-4px);
+    }
+
+    .feature-icon {
+      width: 52px;
+      height: 52px;
+      border-radius: 14px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      color: #818cf8;
+    }
+
+    .feature-title {
+      font-family: var(--font-heading);
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .feature-text {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    /* Stacks Showcase Interactive */
+    .stacks-section {
+      padding: 70px 0;
+      background: rgba(15, 18, 30, 0.6);
+      border-top: 1px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .stacks-tabs {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 40px;
+    }
+
+    .tab-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 10px 24px;
+      border-radius: 30px;
+      font-family: var(--font-heading);
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .tab-btn.active {
+      background: var(--primary-gradient);
+      color: #fff;
+      border-color: transparent;
+    }
+
+    .tab-content {
+      display: none;
+      animation: fadeIn 0.4s ease;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .stack-card-preview {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-xl);
+      padding: 40px;
+      max-width: 800px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .stack-badge {
+      display: inline-block;
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    /* Installation Section */
+    .install-section {
+      padding: 90px 0;
+    }
+
+    .install-box {
+      background: #0f1322;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 24px 30px;
+      position: relative;
+      max-width: 760px;
+      margin: 0 auto;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    }
+
+    .install-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .install-title {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .copy-btn:hover {
+      background: var(--primary-accent);
+    }
+
+    code-block {
+      display: block;
+      font-family: 'Fira Code', 'Courier New', monospace;
+      font-size: 0.95rem;
+      color: #a5b4fc;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Requirements Grid */
+    .req-grid {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin-top: 36px;
+      flex-wrap: wrap;
+    }
+
+    .req-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    .req-item svg {
+      color: #10b981;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border-color);
+      padding: 40px 0;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    footer a {
+      color: #818cf8;
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 768px) {
+      .hero-title {
+        font-size: 2.4rem;
+      }
+      .nav-inner {
+        flex-direction: column;
+        height: auto;
+        padding: 16px 0;
+        gap: 12px;
+      }
+      .lang-switcher {
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="container">
+      <div class="nav-inner">
+        <a href="#" class="brand">
+          <div class="brand-icon">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+          </div>
+          <span>macOS Dock Stack</span>
+        </a>
+
+        <div class="nav-actions">
+          <!-- Language Switcher (5 Languages) -->
+          <div class="lang-switcher" id="langSwitcher">
+            <button class="lang-btn active" onclick="setLanguage('en')">🇺🇸 EN</button>
+            <button class="lang-btn" onclick="setLanguage('pt')">🇧🇷 PT</button>
+            <button class="lang-btn" onclick="setLanguage('es')">🇪🇸 ES</button>
+            <button class="lang-btn" onclick="setLanguage('zh')">🇨🇳 ZH</button>
+            <button class="lang-btn" onclick="setLanguage('fr')">🇫🇷 FR</button>
+          </div>
+
+          <a href="https://github.com/eliasfarah/macos-dock" target="_blank" class="github-link">
+            <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            <span>GitHub</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="badge" id="heroBadge">✨ Designed for GNOME Shell 50</div>
+      <h1 class="hero-title" id="heroTitle">The macOS Dock Experience.<br>Reimagined for Linux.</h1>
+      <p class="hero-subtitle" id="heroSubtitle">
+        Built from the ground up for GNOME Shell 50. Featuring pixel-perfect liquid glass blur, smooth cursor magnification, Finder Stacks (Fan, Grid, List), and genie minimize effects.
+      </p>
+
+      <div class="cta-group">
+        <a href="#install" class="btn-primary" id="btnInstall">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          <span id="txtBtnInstall">Install Extension</span>
+        </a>
+        <a href="https://github.com/eliasfarah/macos-dock" target="_blank" class="btn-secondary" id="btnSource">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+          <span id="txtBtnSource">View Source Code</span>
+        </a>
+      </div>
+
+      <!-- Live Dock Screenshot Showcase -->
+      <div class="showcase-window">
+        <div class="window-header">
+          <div class="window-dots">
+            <div class="dot dot-red"></div>
+            <div class="dot dot-yellow"></div>
+            <div class="dot dot-green"></div>
+          </div>
+          <div class="window-title">macOS Dock Stack — Desktop Preview</div>
+          <div></div>
+        </div>
+        <img src="assets/dock-screenshot.png" alt="macOS Dock Stack Preview on GNOME 50" class="showcase-img">
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Grid -->
+  <section class="features-section">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title" id="featuresTitle">Engineered to Wow. Built for Precision.</h2>
+        <p class="section-desc" id="featuresDesc">Every visual dimension—padding, corner radius, indicator offset, and liquid glass tint—was measured from real macOS Tahoe captures.</p>
+      </div>
+
+      <div class="features-grid">
+        <!-- Feature 1 -->
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+          </div>
+          <h3 class="feature-title" id="f1Title">Real Liquid Glass & Magnification</h3>
+          <p class="feature-text" id="f1Text">Genuine background blur using GNOME Shell's native `Shell.BlurEffect`. Includes dynamic light & dark glass palettes with smooth Gaussian cursor magnification.</p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+          </div>
+          <h3 class="feature-title" id="f2Title">Finder Folder Stacks</h3>
+          <p class="feature-text" id="f2Text">Pin any folder to your dock. Expand items seamlessly in Fan, Grid, or List presentations with real-time download progress rings and spring physics animations.</p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <h3 class="feature-title" id="f3Title">Genie Lamp Minimize Effect</h3>
+          <p class="feature-text" id="f3Text">Experience the iconic macOS genie minimize transition. Windows warp gracefully into their respective dock app icons upon minimizing.</p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </div>
+          <h3 class="feature-title" id="f4Title">Smart Trash & File Monitor</h3>
+          <p class="feature-text" id="f4Text">Dynamic trash icon reflecting full vs empty status, drag-to-trash support, and auto-sorting stacks by "Date Added" so the latest file is always on top.</p>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+          </div>
+          <h3 class="feature-title" id="f5Title">Instant Settings & Zero Conflicts</h3>
+          <p class="feature-text" id="f5Text">All preferences take effect immediately without restarting GNOME Shell. Automatically handles Dash-to-Dock conflicts cleanly on boot.</p>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
+          </div>
+          <h3 class="feature-title" id="f6Title">Curated macOS Color System</h3>
+          <p class="feature-text" id="f6Text">Every single component — from translucent glass to dark/light running indicators — uses verified color values sampled directly from macOS Tahoe.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stacks Showcase Interactive -->
+  <section class="stacks-section">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title" id="stacksTitle">Finder Stacks Presentation</h2>
+        <p class="section-desc" id="stacksDesc">Choose how your pinned folders expand when clicked on the dock.</p>
+      </div>
+
+      <div class="stacks-tabs">
+        <button class="tab-btn active" onclick="switchStackTab('fan')">🪭 Fan (Leque)</button>
+        <button class="tab-btn" onclick="switchStackTab('grid')">🔲 Grid (Grade)</button>
+        <button class="tab-btn" onclick="switchStackTab('list')">📜 List (Lista)</button>
+      </div>
+
+      <div id="tab-fan" class="tab-content active">
+        <div class="stack-card-preview">
+          <span class="stack-badge">FAVORITE FOR QUICK ACCESS</span>
+          <h3 style="font-size: 1.6rem; font-family: var(--font-heading); margin-bottom: 12px;" id="fanTitle">Floating Fan View</h3>
+          <p style="color: var(--text-muted); font-size: 1rem; max-width: 600px; margin: 0 auto 20px;" id="fanDesc">
+            Items arc upward from the dock icon with spring animations, floating freely over the desktop without an enclosing box. Perfect for your Downloads folder!
+          </p>
+        </div>
+      </div>
+
+      <div id="tab-grid" class="tab-content">
+        <div class="stack-card-preview">
+          <span class="stack-badge">BEST FOR LARGE FOLDERS</span>
+          <h3 style="font-size: 1.6rem; font-family: var(--font-heading); margin-bottom: 12px;" id="gridTitle">Glass Grid Panel</h3>
+          <p style="color: var(--text-muted); font-size: 1rem; max-width: 600px; margin: 0 auto 20px;" id="gridDesc">
+            Displays item thumbnails in a spacious grid inside a curved glass panel. Great for browsing photos, documents, and media libraries.
+          </p>
+        </div>
+      </div>
+
+      <div id="tab-list" class="tab-content">
+        <div class="stack-card-preview">
+          <span class="stack-badge">CLEAN & COMPACT</span>
+          <h3 style="font-size: 1.6rem; font-family: var(--font-heading); margin-bottom: 12px;" id="listTitle">Vertical List View</h3>
+          <p style="color: var(--text-muted); font-size: 1rem; max-width: 600px; margin: 0 auto 20px;" id="listDesc">
+            A classic file list view with crisp icons and full file names. Quick single-click opening directly into your default app.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation Section -->
+  <section class="install-section" id="install">
+    <div class="container">
+      <div class="section-header">
+        <h2 class="section-title" id="installTitle">Install in One Terminal Command</h2>
+        <p class="section-desc" id="installDesc">Compatible with GNOME Shell 50 on Wayland and X11 sessions.</p>
+      </div>
+
+      <div class="install-box">
+        <div class="install-header">
+          <span class="install-title">BASH / TERMINAL</span>
+          <button class="copy-btn" onclick="copyInstallCommand()" id="btnCopy">Copy Command</button>
+        </div>
+        <code-block id="cmdCode">UUID=macos-dock-stack@eliasfa.gmail.com
+curl -LO https://github.com/eliasfarah/macos-dock/releases/latest/download/$UUID.shell-extension.zip
+gnome-extensions install --force $UUID.shell-extension.zip
+gnome-extensions enable $UUID</code-block>
+      </div>
+
+      <div class="req-grid">
+        <div class="req-item">
+          <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+          <span id="req1">GNOME Shell 50</span>
+        </div>
+        <div class="req-item">
+          <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+          <span id="req2">Wayland & X11 Supported</span>
+        </div>
+        <div class="req-item">
+          <svg width="20" height="20" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+          <span id="req3">GJS & Clutter Native</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p id="footerText">Open source project created by <a href="https://github.com/eliasfarah" target="_blank">Elias Farah</a>. Built with ❤️ for the Linux community.</p>
+    </div>
+  </footer>
+
+  <!-- Internationalization (5 Languages) & Scripting -->
+  <script>
+    const translations = {
+      en: {
+        heroBadge: "✨ Designed for GNOME Shell 50",
+        heroTitle: "The macOS Dock Experience.<br>Reimagined for Linux.",
+        heroSubtitle: "Built from the ground up for GNOME Shell 50. Featuring pixel-perfect liquid glass blur, smooth cursor magnification, Finder Stacks (Fan, Grid, List), and genie minimize effects.",
+        txtBtnInstall: "Install Extension",
+        txtBtnSource: "View Source Code",
+        featuresTitle: "Engineered to Wow. Built for Precision.",
+        featuresDesc: "Every visual dimension—padding, corner radius, indicator offset, and liquid glass tint—was measured from real macOS Tahoe captures.",
+        f1Title: "Real Liquid Glass & Magnification",
+        f1Text: "Genuine background blur using GNOME Shell's native `Shell.BlurEffect`. Includes dynamic light & dark glass palettes with smooth Gaussian cursor magnification.",
+        f2Title: "Finder Folder Stacks",
+        f2Text: "Pin any folder to your dock. Expand items seamlessly in Fan, Grid, or List presentations with real-time download progress rings and spring physics animations.",
+        f3Title: "Genie Lamp Minimize Effect",
+        f3Text: "Experience the iconic macOS genie minimize transition. Windows warp gracefully into their respective dock app icons upon minimizing.",
+        f4Title: "Smart Trash & File Monitor",
+        f4Text: "Dynamic trash icon reflecting full vs empty status, drag-to-trash support, and auto-sorting stacks by 'Date Added' so the latest file is always on top.",
+        f5Title: "Instant Settings & Zero Conflicts",
+        f5Text: "All preferences take effect immediately without restarting GNOME Shell. Automatically handles Dash-to-Dock conflicts cleanly on boot.",
+        f6Title: "Curated macOS Color System",
+        f6Text: "Every single component — from translucent glass to dark/light running indicators — uses verified color values sampled directly from macOS Tahoe.",
+        stacksTitle: "Finder Stacks Presentation",
+        stacksDesc: "Choose how your pinned folders expand when clicked on the dock.",
+        fanTitle: "Floating Fan View",
+        fanDesc: "Items arc upward from the dock icon with spring animations, floating freely over the desktop without an enclosing box. Perfect for your Downloads folder!",
+        gridTitle: "Glass Grid Panel",
+        gridDesc: "Displays item thumbnails in a spacious grid inside a curved glass panel. Great for browsing photos, documents, and media libraries.",
+        listTitle: "Vertical List View",
+        listDesc: "A classic file list view with crisp icons and full file names. Quick single-click opening directly into your default app.",
+        installTitle: "Install in One Terminal Command",
+        installDesc: "Compatible with GNOME Shell 50 on Wayland and X11 sessions.",
+        btnCopy: "Copy Command",
+        req1: "GNOME Shell 50",
+        req2: "Wayland & X11 Supported",
+        req3: "GJS & Clutter Native",
+        footerText: "Open source project created by <a href='https://github.com/eliasfarah' target='_blank'>Elias Farah</a>. Built with ❤️ for the Linux community."
+      },
+      pt: {
+        heroBadge: "✨ Desenvolvido para GNOME Shell 50",
+        heroTitle: "A Experiência do macOS Dock.<br>Recriada para Linux.",
+        heroSubtitle: "Construído do zero para o GNOME Shell 50. Desfoque de vidro líquido real, magnificação suave no cursor, Stacks do Finder (Leque, Grade, Lista) e efeito genie ao minimizar.",
+        txtBtnInstall: "Instalar Extensão",
+        txtBtnSource: "Ver Código Fonte",
+        featuresTitle: "Engenharia de Precisão e Visual Impressionante.",
+        featuresDesc: "Cada medida visual — padding, raio dos cantos, indicador e tint de vidro — foi medida em capturas reais do macOS Tahoe.",
+        f1Title: "Vidro Líquido Real & Magnificação",
+        f1Text: "Desfoque de fundo autêntico usando `Shell.BlurEffect` nativo do GNOME. Paletas clara e escura dinâmicas com magnificação gaussiana no cursor.",
+        f2Title: "Stacks de Pasta do Finder",
+        f2Text: "Fixe qualquer pasta na dock. Expanda conteúdos nos modos Leque, Grade ou Lista com progresso de download em tempo real e física de mola.",
+        f3Title: "Efeito Lâmpada Genie ao Minimizar",
+        f3Text: "Reviva o clássico efeito genie do macOS. Janelas se distorcem e encolhem suavemente em direção ao ícone do app na dock ao minimizar.",
+        f4Title: "Lixeira Inteligente & Monitor de Arquivos",
+        f4Text: "Lixeira dinâmica (cheia/vazia), suporte a arrastar para a lixeira e ordenação automática 'Data de Adição' para ver sempre o arquivo mais recente.",
+        f5Title: "Configurações Instantâneas & Sem Conflitos",
+        f5Text: "Todas as preferências têm efeito imediato sem reiniciar o Shell. Desativa o Dash-to-Dock automaticamente ao iniciar para evitar conflitos.",
+        f6Title: "Sistema de Cores macOS Tahoe",
+        f6Text: "Todos os componentes visuais utilizam valores exatos de cores medidos diretamente em capturas reais do macOS.",
+        stacksTitle: "Apresentações das Stacks do Finder",
+        stacksDesc: "Escolha como suas pastas fixadas se expandem ao clicar na dock.",
+        fanTitle: "Modo Leque (Fan)",
+        fanDesc: "Os itens sobem do ícone em arco flutuando sobre a área de trabalho com efeito de mola. Perfeito para a pasta Downloads!",
+        gridTitle: "Painel de Grade de Vidro (Grid)",
+        gridDesc: "Exibe miniaturas dos arquivos em uma grade espaçosa dentro de um painel de vidro curvo. Ideal para fotos, documentos e mídias.",
+        listTitle: "Modo Lista Vertical (List)",
+        listDesc: "Lista clássica de arquivos com ícones nítidos e nomes completos. Clique único para abrir diretamente no aplicativo padrão.",
+        installTitle: "Instale com Um Comando no Terminal",
+        installDesc: "Compatível com GNOME Shell 50 em sessões Wayland e X11.",
+        btnCopy: "Copiar Comando",
+        req1: "GNOME Shell 50",
+        req2: "Suporte a Wayland & X11",
+        req3: "Nativo em GJS & Clutter",
+        footerText: "Projeto código aberto criado por <a href='https://github.com/eliasfarah' target='_blank'>Elias Farah</a>. Feito com ❤️ para a comunidade Linux."
+      },
+      es: {
+        heroBadge: "✨ Diseñado para GNOME Shell 50",
+        heroTitle: "La Experiencia del macOS Dock.<br>Reimaginada para Linux.",
+        heroSubtitle: "Construido desde cero para GNOME Shell 50. Desfoque de cristal real, magnificación suave en el cursor, Finder Stacks (Abanico, Cuadrícula, Lista) y efecto genie.",
+        txtBtnInstall: "Instalar Extensión",
+        txtBtnSource: "Ver Código Fuente",
+        featuresTitle: "Ingeniería de Precisión y Diseño Asombroso.",
+        featuresDesc: "Cada dimensión visual (padding, radio de esquinas, indicador y tinte de cristal) fue medida en capturas reales de macOS Tahoe.",
+        f1Title: "Cristal Líquido Real y Magnificación",
+        f1Text: "Desenfoque de fondo auténtico mediante `Shell.BlurEffect` nativo de GNOME. Paletas claras y oscuras dinámicas con magnificación gaussiana.",
+        f2Title: "Stacks de Carpetas de Finder",
+        f2Text: "Fija cualquier carpeta a tu dock. Expande contenidos en Abanico, Cuadrícula o Lista con progreso de descarga en tiempo real y física de resorte.",
+        f3Title: "Efecto Genie al Minimizar",
+        f3Text: "Experimenta el icónico efecto genie de macOS. Las ventanas se deforman suavemente hacia el icono del app correspondiente en el dock.",
+        f4Title: "Papelera Inteligente y Monitor de Archivos",
+        f4Text: "Icono de papelera dinámico (lleno/vacío), soporte para arrastrar a la papelera y ordenación automática por fecha de adición.",
+        f5Title: "Ajustes Instantáneos y Cero Conflictos",
+        f5Text: "Todas las preferencias se aplican al instante sin reiniciar GNOME Shell. Resuelve automáticamente conflictos con Dash-to-Dock.",
+        f6Title: "Sistema de Color macOS Tahoe",
+        f6Text: "Cada componente utiliza valores de color verificados y muestreados directamente de capturas de pantalla de macOS Tahoe.",
+        stacksTitle: "Presentación de Stacks de Finder",
+        stacksDesc: "Elige cómo se expanden tus carpetas fijadas al hacer clic en el dock.",
+        fanTitle: "Vista en Abanico (Fan)",
+        fanDesc: "Los elementos se arquean hacia arriba desde el icono flotando libremente sobre el escritorio. ¡Ideal para tu carpeta de Descargas!",
+        gridTitle: "Panel en Cuadrícula (Grid)",
+        gridDesc: "Muestra miniaturas de archivos en una cuadrícula espaciosa dentro de un panel de cristal curvado. Excelente para fotos y documentos.",
+        listTitle: "Vista en Lista Vertical (List)",
+        listDesc: "Lista clásica de archivos con iconos nítidos y nombres completos. Apertura con un solo clic en tu aplicación predeterminada.",
+        installTitle: "Instálalo con Un Comando en la Terminal",
+        installDesc: "Compatible con GNOME Shell 50 en sesiones Wayland y X11.",
+        btnCopy: "Copiar Comando",
+        req1: "GNOME Shell 50",
+        req2: "Soporte para Wayland y X11",
+        req3: "Nativo en GJS y Clutter",
+        footerText: "Proyecto de código abierto creado por <a href='https://github.com/eliasfarah' target='_blank'>Elias Farah</a>. Hecho con ❤️ para la comunidad Linux."
+      },
+      zh: {
+        heroBadge: "✨ 专为 GNOME Shell 50 打造",
+        heroTitle: "macOS Dock 绝佳体验。<br>在 Linux 上焕然一新。",
+        heroSubtitle: "专为 GNOME Shell 50 从头构建。拥有高精度毛玻璃高斯模糊、流畅光标放大效果、Finder Stacks（扇形、网格、列表）与 Genie 最小化动画。",
+        txtBtnInstall: "安装扩展",
+        txtBtnSource: "查看源代码",
+        featuresTitle: "精雕细琢，令人赞叹。",
+        featuresDesc: "每一个视觉尺寸——内边距、圆角半径、指示器偏移与玻璃色调——均直接精准测量自 macOS Tahoe 实际截图。",
+        f1Title: "真实液态玻璃与光标放大",
+        f1Text: "基于 GNOME Shell 原生 `Shell.BlurEffect` 的真实背景模糊。支持深色/浅色动态玻璃调色板与高斯光标平滑放大。",
+        f2Title: "Finder 文件夹 Stack 展开",
+        f2Text: "可将任意文件夹固定至 Dock。支持扇形、网格、列表三种视图展开，具备实时下载进度环与弹簧物理动画。",
+        f3Title: "Genie 经典的精灵神奇最小化",
+        f3Text: "还原经典 macOS Genie 最小化过渡动画。窗口在最小化时平滑扭曲收缩至对应的 Dock 图标中。",
+        f4Title: "智能垃圾桶与文件监控",
+        f4Text: "动态垃圾桶图标（满/空状态），支持拖拽至垃圾桶，按“添加日期”自动排序，最新文件始终置顶。",
+        f5Title: "即时生效设置与零冲突",
+        f5Text: "所有偏好设置无需重启 GNOME Shell 即可即时生效。启动时自动优雅解决与 Dash-to-Dock 的冲突。",
+        f6Title: "macOS Tahoe 考究色彩系统",
+        f6Text: "从半透明玻璃到运行指示器，每一个视觉组件均采用来自 macOS Tahoe 测量的色彩数值。",
+        stacksTitle: "Finder Stacks 展开样式",
+        stacksDesc: "选择点击 Dock 上的固定文件夹时的展开呈现方式。",
+        fanTitle: "扇形展开视图 (Fan)",
+        fanDesc: "文件以弹簧动画沿弧形向上展开，悬浮于桌面之上。非常适合 Downloads 下载文件夹！",
+        gridTitle: "玻璃网格面板 (Grid)",
+        gridDesc: "在弯曲玻璃面板中大空间展示文件缩略图。非常适合浏览照片、文档与媒体库。",
+        listTitle: "垂直列表视图 (List)",
+        listDesc: "清晰图标与完整文件名排列的经典文件列表。单击即可直接使用默认应用打开。",
+        installTitle: "一行终端命令一键安装",
+        installDesc: "全面兼容 Wayland 与 X11 会话下的 GNOME Shell 50。",
+        btnCopy: "复制命令",
+        req1: "GNOME Shell 50",
+        req2: "支持 Wayland & X11",
+        req3: "原生 GJS & Clutter",
+        footerText: "开源项目，由 <a href='https://github.com/eliasfarah' target='_blank'>Elias Farah</a> 精心打造。用 ❤️ 献给 Linux 社区。"
+      },
+      fr: {
+        heroBadge: "✨ Conçu pour GNOME Shell 50",
+        heroTitle: "L'Expérience macOS Dock.<br>Réinventée pour Linux.",
+        heroSubtitle: "Conçu à partir de zéro pour GNOME Shell 50. Flou de verre liquide authentique, magnification fluide au survol, Finder Stacks (Éventail, Grille, Liste) et effet genie.",
+        txtBtnInstall: "Installer l'extension",
+        txtBtnSource: "Voir le code source",
+        featuresTitle: "Ingénierie de Précision et Visual Bluffant.",
+        featuresDesc: "Chaque dimension visuelle (padding, rayon des coins, indicateurs) a été mesurée à partir de captures réelles de macOS Tahoe.",
+        f1Title: "Verre Liquide Authentique & Magnification",
+        f1Text: "Vrai flou d'arrière-plan avec le `Shell.BlurEffect` natif de GNOME. Palettes dynamiques claires & sombres avec magnification gaussienne du curseur.",
+        f2Title: "Stacks de Dossiers Finder",
+        f2Text: "Épinglez n'importe quel dossier dans le dock. Déployez les fichiers en Éventail, Grille ou Liste avec barres de téléchargement en temps réel.",
+        f3Title: "Effet Genie au Réducteur",
+        f3Text: "Retrouvez l'icône effet genie de macOS. Les fenêtres se déforment élégamment vers l'icône correspondante sur le dock.",
+        f4Title: "Corbeille Intelligente & Suivi de Fichiers",
+        f4Text: "Icône de corbeille dynamique (pleine/vide), glisser-déposer vers la corbeille et tri automatique par date d'ajout.",
+        f5Title: "Réglages Instantanés & Zéro Conflit",
+        f5Text: "Toutes les préférences s'appliquent immédiatement sans redémarrer le Shell. Gestion automatique des conflits avec Dash-to-Dock.",
+        f6Title: "Système de Couleurs macOS Tahoe",
+        f6Text: "Chaque composant visuel utilise des valeurs de couleur vérifiées, directement mesurées sur macOS Tahoe.",
+        stacksTitle: "Présentations des Stacks Finder",
+        stacksDesc: "Choisissez comment vos dossiers s'agrandissent en cliquant sur le dock.",
+        fanTitle: "Vue en Éventail (Fan)",
+        fanDesc: "Les éléments s'élèvent en arc à partir de l'icône avec animations sur ressort. Parfait pour le dossier Téléchargements !",
+        gridTitle: "Panneau Grille en Verre (Grid)",
+        gridDesc: "Affiche les vignettes dans une grille spacieuse dans un panneau en verre bombé. Idéal pour les photos et documents.",
+        listTitle: "Vue Liste Verticale (List)",
+        listDesc: "Une liste classique avec des icônes nettes et les noms complets. Ouverture en un clic dans votre application par défaut.",
+        installTitle: "Installation en Une Commande Terminal",
+        installDesc: "Compatible avec GNOME Shell 50 sur sessions Wayland et X11.",
+        btnCopy: "Copier la commande",
+        req1: "GNOME Shell 50",
+        req2: "Support Wayland & X11",
+        req3: "Natif GJS & Clutter",
+        footerText: "Projet open source créé par <a href='https://github.com/eliasfarah' target='_blank'>Elias Farah</a>. Fait avec ❤️ pour la communauté Linux."
+      }
+    };
+
+    let currentLang = 'en';
+
+    function setLanguage(lang) {
+      if (!translations[lang]) return;
+      currentLang = lang;
+
+      // Update Active Button
+      const buttons = document.querySelectorAll('.lang-btn');
+      buttons.forEach(btn => {
+        if (btn.getAttribute('onclick').includes(`'${lang}'`)) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+
+      // Update Texts
+      const dict = translations[lang];
+      for (const [key, value] of Object.entries(dict)) {
+        const el = document.getElementById(key);
+        if (el) {
+          el.innerHTML = value;
+        }
+      }
+    }
+
+    function switchStackTab(tabName) {
+      const tabs = document.querySelectorAll('.tab-btn');
+      tabs.forEach(t => t.classList.remove('active'));
+
+      const contents = document.querySelectorAll('.tab-content');
+      contents.forEach(c => c.classList.remove('active'));
+
+      event.target.classList.add('active');
+      document.getElementById(`tab-${tabName}`).classList.add('active');
+    }
+
+    function copyInstallCommand() {
+      const code = document.getElementById('cmdCode').innerText;
+      navigator.clipboard.writeText(code).then(() => {
+        const btn = document.getElementById('btnCopy');
+        const orig = btn.innerText;
+        btn.innerText = 'Copied!';
+        btn.style.background = '#10b981';
+        setTimeout(() => {
+          btn.innerText = orig;
+          btn.style.background = '';
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>

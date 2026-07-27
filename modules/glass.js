@@ -69,6 +69,17 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
     //
     // Trading a working blur for square-free corners is not a trade this
     // codebase gets to make silently, so the corners stay as they are.
+    //
+    // Second attempt, also reverted: a small unrounded "cap" per corner,
+    // painted in the same tint colour, laid over just the wedge — the
+    // theory being that matching the *colour* would hide the seam even
+    // without a live rounded blur there. Tested live: it did the opposite.
+    // The wedge is small but the surrounding blur is textured (live desktop
+    // detail, a gradient), while a flat matching-colour square is not — so
+    // instead of a subtle colour step, each corner showed an obvious flat
+    // square sitting on top of the glass, worse than the original mismatch.
+    // Any future fix needs to preserve real blur texture in that region,
+    // not just approximate its average colour.
     const blurEffect = new Shell.BlurEffect({
         mode: Shell.BlurMode.BACKGROUND,
         radius: 0,
