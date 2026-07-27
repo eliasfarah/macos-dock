@@ -73,6 +73,19 @@ const AUTOHIDE_TRIGGER_HEIGHT = 2; // reveal band pinned to the screen edge
 const UNPIN_DROP_MARGIN = 60; // how far past the dock a drop must land to unpin
 const AUTOHIDE_DELAY = 350; // ms the pointer must stay away before re-hiding
 const TOOLTIP_GAP = 10; // gap between an icon's top and its tooltip
+// Hover magnification follow. MAGNIFY_TAU is the exponential time
+// constant (ms) each icon uses to close the gap to its target scale:
+// small enough that the icons feel glued to the pointer, large enough
+// that the growth still reads as motion rather than a snap.
+const MAGNIFY_TAU = 55;
+const MAGNIFY_SCALE_EPSILON = 0.002; // "close enough to rest" for scale
+const MAGNIFY_PIXEL_EPSILON = 0.05;  // ...and for translation/width, in px
+// How many settled frames the ticker keeps running for before shutting
+// itself down. Without this grace period a slow pointer sweep — where
+// each frame's target is close enough to the last that everything is
+// already "settled" — would stop and restart the ticker on every single
+// mouse report, which is most of the churn this design exists to avoid.
+const MAGNIFY_IDLE_FRAMES = 30;
 // How many app ids the recents queue remembers on disk, independently of
 // how many the preference currently displays — see _recordRecentApps().
 const RECENT_APPS_MEMORY = 12;
@@ -107,7 +120,7 @@ export class DockManager {
         // How many closed-recent slots "Remover da Dock" has suppressed —
         // see _forgetRecentApp() and _recentApps().
         this._forgottenRecentSlots = 0;
-        this._startupRedrawIds = [];
+        this._overviewHiddenId = 0;
 
         this._appSystem = Shell.AppSystem.get_default();
         this._favorites = AppFavorites.getAppFavorites();
@@ -118,6 +131,9 @@ export class DockManager {
 
         this._magnifyMotionId = 0;
         this._magnifyLeaveId = 0;
+        this._magnifyPointerX = null; // null == pointer is not over the row
+        this._magnifyTicker = null;
+        this._magnifySettledFrames = 0;
         this._dockBaseX = null;
         this._dockBaseWidth = null;
         this._dockTargetWidth = null;
@@ -128,6 +144,18 @@ export class DockManager {
         this._autohideStrip = null;
         this._autohideTimeoutId = 0;
         this._dockHidden = false;
+
+        // Whether the strut may reserve space yet — false while the login
+        // overview-exit is still in flight, see _settleStrut().
+        this._strutSettled = false;
+        this._watchdogIds = [];
+
+        // Set the moment the dock actor is destroyed from underneath us
+        // (shell shutdown destroys chrome from C before disable() runs);
+        // guards the signal handlers that would otherwise poke disposed
+        // actors — the ~40 "has been already disposed" journal lines per
+        // logout all came through 'workareas-changed' → _layoutDock().
+        this._chromeGone = false;
 
         this._dragIcon = null;
 
@@ -140,21 +168,11 @@ export class DockManager {
     }
 
     enable() {
-        // The glass blur (RoundedBackgroundBlurEffect, see glass.js) feeds
-        // on a live Clutter.Clone of global.window_group. Mutter normally
-        // lets a window that covers a whole monitor bypass compositing
-        // entirely ("unredirect") so it can scan straight out to the
-        // display — but an unredirected window has no up-to-date content
-        // inside the compositor's scene graph, so the clone (like the
-        // framebuffer blit this code used before it) would go stale
-        // exactly when a maximized/fullscreen app is open.
-        // `disable_unredirect()` is the same guard other blur-dependent
-        // extensions (Blur My Shell, Dash to Dock) call for this reason —
-        // it forces normal compositing for as long as our dock exists,
-        // paired with `enable_unredirect()` in disable() to give the
-        // optimisation back when we're not around to need it.
-        global.compositor.disable_unredirect();
-
+        // Note: no disable_unredirect() here, deliberately. The glass blur
+        // samples a clone of the static background group only (see
+        // glass.js), which does not go stale when a fullscreen window
+        // bypasses compositing — so fullscreen apps/games keep mutter's
+        // unredirect fast path while the dock is enabled.
         this._buildChrome();
         this._connectSignals();
         this._hideNativeDash();
@@ -183,11 +201,6 @@ export class DockManager {
     }
 
     disable() {
-        // Undoes the disable_unredirect() in enable() — see the comment
-        // there. Safe to call even if enable() never got this far, since
-        // Mutter just tracks it as a plain counter.
-        global.compositor.enable_unredirect();
-
         // Set before anything else: teardown must not start animations on
         // actors it is about to destroy. _resetMagnification() did exactly
         // that, and the springs it launched kept writing scale/translation
@@ -349,32 +362,114 @@ export class DockManager {
             return Clutter.EVENT_PROPAGATE;
         });
 
+        this._dockActor.connect('destroy', () => {
+            this._chromeGone = true;
+        });
+
         this._installDropTargets();
 
         this._layoutDock();
         this._updateAutohide();
 
-        // At real session start the glass panel's very first paint can
-        // land before global.window_group has anything worth cloning (see
-        // the backdrop clone in glass.js and DIAG 3 in
-        // roundedBlurEffect.js) — the blur widget then shows solid black
-        // at the corners/edges, and because nothing on an otherwise idle
-        // desktop invalidates it again, that stale first frame just sits
-        // there until *something* forces the stage to repaint, which is
-        // why opening any app "fixed" it. Forcing a few extra repaints in
-        // the seconds after build flushes that stale frame on its own
-        // instead of waiting on an unrelated event.
-        this._startupRedrawIds = [500, 1500, 3000, 6000].map(delay =>
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
-                this._blurEffect?.queue_repaint();
-                return GLib.SOURCE_REMOVE;
-            }));
+        // Persistent, not one-shot, and deliberately nothing but the strut
+        // settle: earlier rounds also fired stage-wide queue_redraw()s and
+        // a per-frame "redraw pump" from here as insurance against stale
+        // pixels on this NVIDIA stack. Those stale pixels (tooltip ghost
+        // trails, the frozen startup frame) turned out to be symptoms of
+        // the window_group backdrop clone that the blur used to carry —
+        // see glass.js — and the forced full-stage redraws were themselves
+        // a large part of the "everything is slow until the first app
+        // opens" report. With the wallpaper-only backdrop there is nothing
+        // left for them to repair.
+        this._overviewHiddenId = Main.overview.connect('hidden', () => {
+            this._settleStrut();
+        });
+
+        // Enabled mid-session (or on a session that never shows the login
+        // overview) there is nothing to wait for — reserve space now.
+        if (!Main.layoutManager._startingUp && !Main.overview.visible)
+            this._settleStrut();
     }
 
     _trackStrutActor() {
         Main.layoutManager.addChrome(this._strutActor, {
-            affectsStruts: !this._settings.dockAutohide,
+            affectsStruts: !this._settings.dockAutohide && this._strutSettled,
         });
+    }
+
+    /**
+     * Lets the strut start reserving space — deliberately NOT done while
+     * the login overview-exit is still on screen.
+     *
+     * The "faixa preta" at session start (photographed at 16:07 on a shell
+     * started 16:06:59, i.e. WITH all the stage-wide redraws below already
+     * fired) survives full-stage repaints, so it is not a stale
+     * framebuffer: the scene itself still contains it. What the scene
+     * contains is the overview's HIDDEN-state frame — no-overview@fthx
+     * calls Main.overview.hide() at startup-complete, and that hide can
+     * wedge before _hideDone() ever runs, leaving overviewGroup visible,
+     * frozen on a frame whose wallpaper is sized to the WORK AREA
+     * (overviewControls' _computeWorkspacesBoxForState). Our strut is what
+     * shortens that work area, so the frozen frame shows wallpaper cut off
+     * above the dock with black below it. "Opening any app fixes it"
+     * because activating a dock icon runs AppIcon.activate(), which calls
+     * Main.overview.hide() again — completing the wedged hide.
+     *
+     * Two-part fix: (1) the strut only starts reserving space once the
+     * overview is genuinely hidden, so every startup frame keeps a
+     * full-height wallpaper and there is nothing black to freeze on; and
+     * (2) a watchdog (see _scheduleOverviewWatchdog) issues the same
+     * Main.overview.hide() the user's manual workaround relied on.
+     */
+    _settleStrut() {
+        if (this._strutSettled)
+            return;
+        this._strutSettled = true;
+        this._updateStrutTracking();
+    }
+
+    /**
+     * Unwedges a stuck overview hide. Predicate: `visible` with
+     * `visibleTarget === false` means a hide was requested and never
+     * finished — a user-opened overview has visibleTarget true and is left
+     * strictly alone (the explicit `=== false` also keeps this a no-op if
+     * a future shell drops the getter). A healthy hide lasts ~300ms; these
+     * checks run 1s+ after startup-complete, so matching the predicate
+     * then means the transition is dead, not merely slow.
+     *
+     * Two arms, verified against the installed GNOME 50 overview.js
+     * (extracted from libshell-18.so): hide() early-returns unless
+     * `_shown` is still true, so it only repairs the state where the hide
+     * request itself got lost. The state this machine actually wedges
+     * into is the other one — hide() ran, `_shown` went false,
+     * `_animateNotVisible()` started `animateFromOverview()`, and that
+     * ease's completion callback never fired, leaving `_visible` stuck
+     * true with the cover pane up and the workspace clones frozen at
+     * work-area size. `_hideDone()` is precisely the dropped callback
+     * (resets `_visible`/`_animationInProgress`, hides overviewGroup,
+     * re-syncs the grab), so calling it is finishing the shell's own
+     * transition, not improvising a new teardown.
+     * The last check also force-settles the strut: whatever happened to
+     * the overview, the dock must eventually reserve its space or
+     * maximized windows would cover it for the rest of the session.
+     */
+    _scheduleOverviewWatchdog() {
+        for (const delay of [1000, 3000, 8000]) {
+            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+                this._watchdogIds = this._watchdogIds.filter(other => other !== id);
+                const overview = Main.overview;
+                if (overview.visible && overview.visibleTarget === false) {
+                    if (overview._shown)
+                        overview.hide();
+                    else if (typeof overview._hideDone === 'function')
+                        overview._hideDone();
+                }
+                if (delay === 8000)
+                    this._settleStrut();
+                return GLib.SOURCE_REMOVE;
+            });
+            this._watchdogIds.push(id);
+        }
     }
 
     // affectsStruts is baked in at addChrome()/_trackActor() time in
@@ -457,7 +552,10 @@ export class DockManager {
         if (!this._tooltip)
             return;
         animateSpring(this._tooltip, { opacity: this._tooltip.opacity }, { opacity: 0 },
-            { duration: 120, preset: SPRING.SOFT, id: 'tooltip', onComplete: () => this._tooltip?.hide() });
+            {
+                duration: 120, preset: SPRING.SOFT, id: 'tooltip',
+                onComplete: () => this._tooltip?.hide(),
+            });
     }
 
     // -- autohide -----------------------------------------------------------
@@ -616,9 +714,20 @@ export class DockManager {
     }
 
     _destroyChrome() {
-        for (const id of this._startupRedrawIds)
+        // Before anything is destroyed: the magnification ticker takes its
+        // frame clock from `_iconBox`, and a timeline still running on a
+        // destroyed actor is the same "animation outlives its target" trap
+        // the per-icon springs used to fall into on teardown.
+        this._stopMagnifyTicker();
+
+        for (const id of this._watchdogIds)
             GLib.Source.remove(id);
-        this._startupRedrawIds = [];
+        this._watchdogIds = [];
+
+        if (this._overviewHiddenId) {
+            Main.overview.disconnect(this._overviewHiddenId);
+            this._overviewHiddenId = 0;
+        }
 
         if (this._dragMonitor) {
             DND.removeDragMonitor(this._dragMonitor);
@@ -832,7 +941,12 @@ export class DockManager {
     }
 
     _layoutDock() {
-        if (!this._dockActor || this._layingOut)
+        // `_chromeGone`: shell shutdown destroys our chrome from C before
+        // disable() ever runs, but 'workareas-changed' still fires while
+        // the display tears its struts down — without this, every such
+        // emission walked disposed actors ("has been already disposed"
+        // spam on every logout).
+        if (!this._dockActor || this._layingOut || this._chromeGone)
             return;
 
         // Re-entrancy guard. _layoutDock() resizes the strut actor, which
@@ -895,7 +1009,6 @@ export class DockManager {
         this._dockBaseX = Math.round(x);
         this._dockBaseWidth = Math.round(width);
         this._dockTargetWidth = this._dockBaseWidth;
-        cancelSpring(this._dockActor, 'magnify-width');
 
         this._dockActor.set_position(Math.round(x), Math.round(y));
         this._dockActor.set_size(Math.round(width), Math.round(height));
@@ -966,8 +1079,24 @@ export class DockManager {
             },
             {
                 object: Main.layoutManager,
-                id: Main.layoutManager.connect('startup-complete', () => this._layoutDock()),
+                id: Main.layoutManager.connect('startup-complete', () => this._onStartupComplete()),
             });
+    }
+
+    // Runs BEFORE no-overview@fthx's own startup-complete handler calls
+    // Main.overview.hide() (we connect at enable time and that extension
+    // is enabled after this one), so at login the overview is still
+    // visible here: the strut keeps waiting for the 'hidden' signal and
+    // the watchdog is armed in case that hide wedges. Without the login
+    // overview (or with no-overview gone) the strut settles immediately.
+    _onStartupComplete() {
+        if (Main.overview.visible) {
+            this._layoutDock();
+            this._scheduleOverviewWatchdog();
+        } else {
+            this._settleStrut();
+            this._layoutDock();
+        }
     }
 
     // -- live updates ------------------------------------------------------
@@ -1382,11 +1511,26 @@ export class DockManager {
     // position write would (see the Clutter.BinLayout-ignores-
     // set_position bug class this project already hit once in stack.js).
 
+    // A 'motion-event' arrives once per *mouse report* — 125Hz on a plain
+    // mouse, up to 1000Hz on a gaming one — which is many times per
+    // rendered frame. The handler therefore does nothing but record where
+    // the pointer is; all the actual work happens once per frame in
+    // _stepMagnification(). Doing it inline instead (as this used to) meant
+    // recomputing every icon's geometry and tearing down/rebuilding a
+    // Clutter.Timeline per icon on every single report — on the order of
+    // ten thousand short-lived timelines a second across the row, each one
+    // re-registering with the frame clock. That is what made the whole
+    // session stutter the moment the pointer crossed the dock: the cost
+    // lands in the compositor's own main loop, so it slows down everything
+    // on screen, not just the dock.
     _enableMagnification() {
         if (!this._settings.dockMagnificationEnabled || !this._iconBox)
             return;
         this._magnifyMotionId = this._iconBox.connect('motion-event', (_actor, event) => {
-            this._updateMagnification(event);
+            const [stageX] = event.get_coords();
+            this._magnifyPointerX = stageX;
+            this._magnifySettledFrames = 0;
+            this._startMagnifyTicker();
             return Clutter.EVENT_PROPAGATE;
         });
         this._magnifyLeaveId = this._iconBox.connect('leave-event', () => {
@@ -1442,11 +1586,50 @@ export class DockManager {
         return icon;
     }
 
-    _updateMagnification(event) {
-        const [stageX] = event.get_coords();
-        const amount = this._settings.dockMagnificationAmount;
-        const range = this._settings.dockMagnificationRange;
+    // The single frame-clock source that drives magnification. One
+    // timeline for the whole row, created when the pointer arrives and
+    // stopped once everything has settled — as opposed to one timeline
+    // per icon per pointer report, which is what this cost before.
+    // repeat_count -1 makes it a plain "tick me every frame" clock; the
+    // nominal duration is never read, get_delta() is.
+    _startMagnifyTicker() {
+        if (this._magnifyTicker || !this._iconBox || this._tearingDown)
+            return;
 
+        const ticker = Clutter.Timeline.new_for_actor(this._iconBox, 1000);
+        ticker.set_repeat_count(-1);
+        ticker.connect('new-frame', () => {
+            if (this._stepMagnification(ticker.get_delta()))
+                this._magnifySettledFrames = 0;
+            else
+                this._magnifySettledFrames += 1;
+
+            if (this._magnifySettledFrames >= MAGNIFY_IDLE_FRAMES)
+                this._stopMagnifyTicker();
+        });
+        this._magnifySettledFrames = 0;
+        this._magnifyTicker = ticker;
+        ticker.start();
+    }
+
+    _stopMagnifyTicker() {
+        if (!this._magnifyTicker)
+            return;
+        this._magnifyTicker.stop();
+        this._magnifyTicker = null;
+    }
+
+    /**
+     * Where every icon *wants* to be, given the current pointer position:
+     * a Gaussian falloff around it, plus the sideways nudge that keeps
+     * grown neighbours from colliding. Pure geometry — nothing is written
+     * to any actor here.
+     *
+     * With the pointer away (`_magnifyPointerX === null`) every target is
+     * simply "at rest", which is how the return-to-normal animation reuses
+     * the exact same follow code instead of a separate spring.
+     */
+    _magnificationTargets(icons) {
         // Every icon's distance is measured from its RESTING centre, not
         // its current on-screen one. getActorGeometry() reports the
         // transformed position, which already includes the
@@ -1465,15 +1648,26 @@ export class DockManager {
         // Sorted left-to-right because the neighbour-displacement maths
         // below is a running prefix sum, which only means anything
         // walked in visual order.
-        const entries = this._magnifiableIcons()
+        const entries = icons
             .map(icon => {
                 const geometry = getActorGeometry(icon);
                 return { icon, restingCenterX: geometry.centerX - icon.translation_x };
             })
             .sort((a, b) => a.restingCenterX - b.restingCenterX);
 
+        const pointerX = this._magnifyPointerX;
+        if (pointerX === null) {
+            for (const entry of entries) {
+                entry.scale = 1;
+                entry.translation = 0;
+            }
+            return { entries, totalExtra: 0 };
+        }
+
+        const amount = this._settings.dockMagnificationAmount;
+        const range = this._settings.dockMagnificationRange;
         for (const entry of entries) {
-            const distance = stageX - entry.restingCenterX;
+            const distance = pointerX - entry.restingCenterX;
             entry.scale = 1 + (amount - 1) * Math.exp(-(distance * distance) / (2 * range * range));
         }
 
@@ -1503,88 +1697,127 @@ export class DockManager {
             entry.translation = 0.5 * (extraBefore[i] - extraAfter);
         });
 
-        // Real macOS widens the dock's own bar as its icons grow, and
-        // without that the outermost icons — pushed outward by the
-        // displacement above — simply hang outside the glass, floating
-        // on the desktop (the dock deliberately does not clip its
-        // children, so a magnified icon can rise above the bar). Growing
-        // the bar by exactly the accumulated extra width and re-centring
-        // it keeps every icon on the glass. This cannot feed back into
-        // the resting positions above: the icon row is centre-aligned,
-        // so widening the panel by W while moving it left by W/2 leaves
-        // the row's centre — and therefore every resting centre — exactly
-        // where it was.
-        this._applyDockWidth(this._dockBaseWidth + totalExtra);
-        this._positionTooltip();
-
-        for (const { icon, scale, translation } of entries) {
-            // A 'motion-event' fires many times per second, and every
-            // animateSpring() call restarts the underdamped spring's
-            // clock from t=0 (cancelSpring + a brand-new Timeline) — with
-            // near-continuous small target changes, the icon kept
-            // replaying only the curve's slow initial ramp and never
-            // reached its snappier back half, which reads as slow-motion
-            // rather than live tracking. Skipping re-targets that aren't
-            // a meaningful change lets each spring actually run long
-            // enough to be felt as motion, not just restarted.
-            const lastScale = icon._magnifyTarget ?? 1;
-            const lastTranslation = icon._magnifyTranslation ?? 0;
-            if (Math.abs(scale - lastScale) < 0.02 && Math.abs(translation - lastTranslation) < 1)
-                continue;
-            icon._magnifyTarget = scale;
-            icon._magnifyTranslation = translation;
-
-            // Re-targets from the icon's current (possibly mid-animation)
-            // scale/translation rather than resetting first, so
-            // continuous pointer movement reads as smooth tracking, not
-            // a jump each frame.
-            // id: 'magnify' — a launch/attention bounce drives the same
-            // icon's translation_y at the same time, and with a single
-            // animation slot per actor whichever started last silently
-            // killed the other (hovering a bouncing icon froze it
-            // mid-bounce). Separate ids let both run, as they do on
-            // macOS.
-            animateSpring(icon,
-                { scale_x: icon.scale_x, scale_y: icon.scale_y, translation_x: icon.translation_x },
-                { scale_x: scale, scale_y: scale, translation_x: translation },
-                { duration: 160, preset: SPRING.MAGNIFY, id: 'magnify' });
-        }
+        return { entries, totalExtra };
     }
 
-    _applyDockWidth(width) {
-        if (!this._dockActor || this._dockBaseWidth == null)
-            return;
+    /**
+     * One frame of the follow. Moves every icon (and the bar itself) a
+     * fraction of the way toward its current target and returns whether
+     * anything is still in motion — false means "settled, stop ticking".
+     *
+     * The step is `1 - exp(-dt/tau)` rather than a fixed fraction, so the
+     * motion looks identical whether the frame clock is running at 60Hz
+     * or 165Hz and it does not degrade if a frame is dropped.
+     */
+    _stepMagnification(deltaMs) {
+        if (this._tearingDown || !this._dockActor || !this._iconBox)
+            return false;
+
+        const icons = this._magnifiableIcons();
+        if (icons.length === 0)
+            return false;
+
+        // Clamped at both ends: get_delta() is 0 on a timeline's very first
+        // frame, and after a stall (or a missed frame under load) it can
+        // report long enough that `blend` saturates at 1 and the icons snap
+        // to their target instead of easing into it.
+        globalThis.__mdockFrames = (globalThis.__mdockFrames ?? 0) + 1; // DIAG temporário
+        const dt = Math.min(50, Math.max(1, deltaMs));
+        const blend = 1 - Math.exp(-dt / MAGNIFY_TAU);
+        const { entries, totalExtra } = this._magnificationTargets(icons);
+        let moving = false;
+
+        for (const { icon, scale, translation } of entries) {
+            let nextScale = icon.scale_x + (scale - icon.scale_x) * blend;
+            let nextTranslation =
+                icon.translation_x + (translation - icon.translation_x) * blend;
+
+            // Snap the last sliver instead of approaching it forever: an
+            // exponential never actually arrives, and a ticker that never
+            // stops is the same class of always-on cost this rewrite is
+            // removing. Sub-pixel differences are invisible anyway.
+            if (Math.abs(scale - nextScale) < MAGNIFY_SCALE_EPSILON)
+                nextScale = scale;
+            else
+                moving = true;
+            if (Math.abs(translation - nextTranslation) < MAGNIFY_PIXEL_EPSILON)
+                nextTranslation = translation;
+            else
+                moving = true;
+
+            icon.set({
+                scale_x: nextScale,
+                scale_y: nextScale,
+                translation_x: nextTranslation,
+            });
+        }
+
+        if (this._stepDockWidth(this._dockBaseWidth + totalExtra, blend))
+            moving = true;
+
+        // Re-run on every frame, not just when the pointer moves: the icon
+        // under the pointer keeps growing after the pointer has stopped,
+        // and a label placed once at hover time would end up sitting on top
+        // of the very icon it names as that icon rises past it.
+        this._positionTooltip();
+
+        return moving;
+    }
+
+    // Real macOS widens the dock's own bar as its icons grow, and without
+    // that the outermost icons — pushed outward by the displacement in
+    // _magnificationTargets — simply hang outside the glass, floating on
+    // the desktop (the dock deliberately does not clip its children, so a
+    // magnified icon can rise above the bar). Growing the bar by exactly
+    // the accumulated extra width and re-centring it keeps every icon on
+    // the glass. This cannot feed back into the resting positions: the
+    // icon row is centre-aligned, so widening the panel by W while moving
+    // it left by W/2 leaves the row's centre — and therefore every resting
+    // centre — exactly where it was.
+    _stepDockWidth(width, blend) {
+        if (this._dockBaseWidth == null || this._dockBaseX == null)
+            return false;
 
         const target = Math.round(width);
-        if (Math.abs((this._dockTargetWidth ?? this._dockBaseWidth) - target) < 2)
-            return;
-        this._dockTargetWidth = target;
+        const current = this._dockActor.width;
+        if (Math.round(current) === target) {
+            this._dockTargetWidth = target;
+            return false;
+        }
 
-        const x = Math.round(this._dockBaseX + (this._dockBaseWidth - target) / 2);
-        animateSpring(this._dockActor,
-            { width: this._dockActor.width, x: this._dockActor.x },
-            { width: target, x },
-            { duration: 160, preset: SPRING.MAGNIFY, id: 'magnify-width' });
+        // The width is an integer, so a proportional step smaller than a
+        // pixel would round straight back to where it started and the
+        // ticker would spin forever without the bar ever moving. Below one
+        // pixel of travel, move exactly one.
+        let delta = (target - current) * blend;
+        if (Math.abs(delta) < 1)
+            delta = Math.sign(target - current);
+
+        const next = Math.round(current + delta);
+        this._dockTargetWidth = next;
+        this._dockActor.set_width(next);
+        this._dockActor.set_x(Math.round(this._dockBaseX + (this._dockBaseWidth - next) / 2));
+        return true;
     }
 
     _resetMagnification() {
-        for (const icon of this._magnifiableIcons()) {
-            icon._magnifyTarget = 1;
-            icon._magnifyTranslation = 0;
-            if (this._tearingDown) {
-                // Snap, don't spring: these actors are about to be
-                // destroyed and an in-flight animation would outlive them.
-                cancelSpring(icon);
-                icon.set({ scale_x: 1, scale_y: 1, translation_x: 0 });
-                continue;
-            }
-            animateSpring(icon,
-                { scale_x: icon.scale_x, scale_y: icon.scale_y, translation_x: icon.translation_x },
-                { scale_x: 1, scale_y: 1, translation_x: 0 },
-                { duration: 200, preset: SPRING.MAGNIFY, id: 'magnify' });
+        this._magnifyPointerX = null;
+
+        if (!this._tearingDown) {
+            // Nothing to animate by hand: with no pointer position every
+            // target is "at rest", so the same follow that grew the icons
+            // shrinks them back.
+            this._startMagnifyTicker();
+            return;
         }
-        if (!this._tearingDown)
-            this._applyDockWidth(this._dockBaseWidth);
+
+        // Snap, don't ease: these actors are about to be destroyed and an
+        // in-flight animation would outlive them.
+        this._stopMagnifyTicker();
+        for (const icon of this._magnifiableIcons()) {
+            cancelSpring(icon);
+            icon.set({ scale_x: 1, scale_y: 1, translation_x: 0 });
+        }
     }
 
     // -- drag to reorder / pin / unpin ---------------------------------------

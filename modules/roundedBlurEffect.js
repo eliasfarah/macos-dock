@@ -20,9 +20,10 @@
  *     NOT done the way the reference does it (a `Clutter.BlitNode` copy
  *     of the live stage framebuffer): that read is driver-dependent and
  *     comes back solid black on this machine. Instead the actor carries a
- *     `Clutter.Clone` of `global.window_group` (see glass.js), and this
- *     effect simply paints the actor's own content — that clone, aligned
- *     by `_alignBackdrop()` — into the blur's input framebuffer.
+ *     `Clutter.Clone` of the wallpaper (see glass.js for the full history
+ *     — DIAG 3 and 4), and this effect simply paints the actor's own
+ *     content — that clone, aligned by `_alignBackdrop()` — into the
+ *     blur's input framebuffer.
  *   - That texture is blurred with `Clutter.BlurNode`, the same public
  *     Clutter primitive Shell.BlurEffect itself uses internally — so the
  *     blur quality/cost is the same, not a hand-rolled approximation.
@@ -107,15 +108,18 @@ import GObject from 'gi://GObject';
 //    uses, so the partial-region-from-onscreen path is essentially
 //    unexercised upstream). Rather than fight the driver, the capture
 //    was rearchitected to never touch the screen framebuffer: the actor
-//    now holds a Clutter.Clone of global.window_group (wallpaper + all
-//    windows — the exact subtree the overview thumbnails clone, so the
-//    pattern is battle-tested, including meta's is-in-clone-paint culling
-//    exemptions), and this effect paints that clone into the blur input
-//    instead of blitting. `_alignBackdrop()` keeps the clone registered
-//    with the panel's stage position (and inverse scale, for the stack
-//    panel's opening spring) every paint. Bonus: this also removes the
-//    stale-pixel feedback risk partial clipped redraws carried, and it no
-//    longer depends on what mutter happened to composite before us.
+//    holds a Clutter.Clone and this effect paints that clone into the
+//    blur input instead of blitting. `_alignBackdrop()` keeps the clone
+//    registered with the panel's stage position (and inverse scale, for
+//    the stack panel's opening spring) every paint.
+//    DIAG 4 (2026-07-27, night — "qualquer animação fica lenta/quebrada
+//    até abrir o primeiro app"): the clone's first source,
+//    global.window_group (wallpaper + every window), poisoned the whole
+//    session's rendering — every window's damage re-rendered the entire
+//    desktop through this effect, a permanently mapped clone of all
+//    windows defeated mutter's occlusion culling stage-wide, and it
+//    required disable_unredirect(). The clone now sources the wallpaper
+//    only (Main.layoutManager._backgroundGroup) — see glass.js.
 // 2. Even with a correctly-varying mask, the corner still bloomed bright:
 //    `cogl_color_out.a *= mask` was applied without also scaling `.rgb`, but
 //    Cogl's default pipeline blending is premultiplied
@@ -192,6 +196,33 @@ function updateFbo(ctx, data, width, height) {
     setupProjection(data.framebuffer, width, height);
 }
 
+// The dock bar's width is animated a pixel at a time while hover
+// magnification grows it, and an exactly-sized offscreen would therefore
+// be thrown away and rebuilt on *every frame* of that animation — four
+// GL object creations and four deletions per frame, on textures the
+// driver has only just finished rendering into. Allocating in coarse
+// steps instead means the pair survives a whole hover sweep, at the cost
+// of a strip of unused texels on the right which nothing ever samples
+// (see the `u` tex-coordinate below).
+//
+// Only the width is bucketed. The height is allocated exactly, and must
+// stay that way: `gl_FragCoord` has its origin at the framebuffer's
+// *bottom* left, so slack at the top would shift the whole rounded-rect
+// mask off the panel, which is the DIAG 2 bug all over again. Slack on
+// the right is harmless because that axis's origin is the edge the panel
+// is already anchored to. (The dock's height doesn't animate anyway —
+// it only changes when the icon-size preference does.)
+const WIDTH_BUCKET = 128;
+
+function bucketWidth(width, current) {
+    // Hysteresis: shrink only once the panel has fallen a full bucket
+    // below what is allocated, so a width oscillating around a boundary
+    // doesn't reintroduce the per-frame churn this exists to remove.
+    if (current > 0 && width <= current && width > current - WIDTH_BUCKET * 2)
+        return current;
+    return Math.max(WIDTH_BUCKET, Math.ceil(width / WIDTH_BUCKET) * WIDTH_BUCKET);
+}
+
 export const RoundedBackgroundBlurEffect = GObject.registerClass(
 class RoundedBackgroundBlurEffect extends Clutter.Effect {
     _init(params = {}) {
@@ -202,8 +233,10 @@ class RoundedBackgroundBlurEffect extends Clutter.Effect {
         this._brightness = params.brightness ?? 1.0;
         this._backdrop = params.backdrop ?? null;
 
-        this._texWidth = -1;
-        this._texHeight = -1;
+        // Allocated size of the two offscreens. `_allocWidth` is bucketed
+        // and so is >= the panel's real width; `_allocHeight` is exact.
+        this._allocWidth = -1;
+        this._allocHeight = -1;
 
         this._final = null;
         this._out = null;
@@ -302,12 +335,19 @@ class RoundedBackgroundBlurEffect extends Clutter.Effect {
             };
         }
 
-        if (texWidth !== this._texWidth || texHeight !== this._texHeight) {
-            updateFbo(ctx, this._final, texWidth, texHeight);
-            updateFbo(ctx, this._out, texWidth, texHeight);
-            this._texWidth = texWidth;
-            this._texHeight = texHeight;
+        const allocWidth = bucketWidth(texWidth, this._allocWidth);
+        if (allocWidth !== this._allocWidth || texHeight !== this._allocHeight) {
+            updateFbo(ctx, this._final, allocWidth, texHeight);
+            updateFbo(ctx, this._out, allocWidth, texHeight);
+            this._allocWidth = allocWidth;
+            this._allocHeight = texHeight;
         }
+
+        // Fraction of the allocated texture the panel actually occupies.
+        // Every rectangle below is still drawn at the panel's real size —
+        // it is only *sampling* that has to be told to stop at the panel's
+        // right edge instead of stretching the whole bucket across it.
+        const u = texWidth / allocWidth;
 
         this._final.pipeline.set_uniform_1f(this._final.brightnessLoc, this._brightness);
         this._final.pipeline.set_uniform_1f(this._final.cornerRadiusLoc, this._cornerRadius);
@@ -315,7 +355,7 @@ class RoundedBackgroundBlurEffect extends Clutter.Effect {
 
         // Input half (diverges from shell-blur-effect.c since DIAG 3):
         // blurNode blurs whatever paints into it, and what paints into it
-        // is the actor's own content — the aligned window_group clone —
+        // is the actor's own content — the aligned wallpaper clone —
         // via a plain ActorNode. The actor's paint lands in blurNode's
         // internal framebuffer in actor-local coordinates (its transform
         // chain was applied to the *stage* framebuffer's matrix stack, and
@@ -331,10 +371,20 @@ class RoundedBackgroundBlurEffect extends Clutter.Effect {
         // through the corner-mask shader into `_out.framebuffer` (same
         // size, local coords); and outNode finally copies the finished
         // rounded result to the stage with a plain pipeline.
+        //
+        // Every rectangle is still texWidth x texHeight even though the two
+        // offscreens may be wider (see bucketWidth): each framebuffer's
+        // projection maps one local unit to one device pixel from its left
+        // edge, so drawing at the panel's real size puts the panel's pixels
+        // — and `gl_FragCoord` with them — at device 0..texWidth either
+        // way. The bucket slack simply sits unused to the right, which is
+        // why the two nodes that *sample* one of these textures pass
+        // explicit `u` tex coordinates rather than the implicit 0..1.
         const outNode = Clutter.LayerNode.new_to_framebuffer(this._out.framebuffer, this._out.pipeline);
         outNode.set_name('RoundedBackgroundBlurEffect (out)');
         node.add_child(outNode);
-        outNode.add_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: texWidth, y2: texHeight }));
+        outNode.add_texture_rectangle(
+            new Clutter.ActorBox({ x1: 0, y1: 0, x2: texWidth, y2: texHeight }), 0, 0, u, 1);
 
         const blurTargetNode = Clutter.LayerNode.new_to_framebuffer(this._final.framebuffer, this._final.pipeline);
         blurTargetNode.set_name('RoundedBackgroundBlurEffect (blur target)');
@@ -350,6 +400,7 @@ class RoundedBackgroundBlurEffect extends Clutter.Effect {
         const maskNode = Clutter.PipelineNode.new(this._final.pipeline);
         maskNode.set_name('RoundedBackgroundBlurEffect (mask)');
         outNode.add_child(maskNode);
-        maskNode.add_rectangle(new Clutter.ActorBox({ x1: 0, y1: 0, x2: texWidth, y2: texHeight }));
+        maskNode.add_texture_rectangle(
+            new Clutter.ActorBox({ x1: 0, y1: 0, x2: texWidth, y2: texHeight }), 0, 0, u, 1);
     }
 });

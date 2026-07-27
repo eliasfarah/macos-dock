@@ -10,6 +10,7 @@
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { RoundedBackgroundBlurEffect } from './roundedBlurEffect.js';
 
 /**
@@ -45,18 +46,30 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         x_expand: true, y_expand: true,
         clip_to_allocation: true,
     });
-    // What the blur effect samples. It used to sample the screen's own
-    // framebuffer (a BlitNode of the live stage, the way Shell.BlurEffect's
-    // BACKGROUND mode does) — that read comes back solid black on this
-    // machine's NVIDIA driver whenever a maximized window is open, see
-    // DIAG 3 in roundedBlurEffect.js. So instead the widget carries a live
-    // Clutter.Clone of global.window_group (wallpaper + every window — the
-    // same subtree the overview's workspace thumbnails clone), clipped to
-    // the panel; the effect realigns it on every paint so the slice visible
-    // through the panel is exactly the desktop area behind the panel. The
-    // clone is never painted sharp: the effect consumes the widget's content
+    // What the blur effect samples. Two earlier sources both failed on
+    // this machine:
+    //  - the screen's own framebuffer (a BlitNode of the live stage, the
+    //    way Shell.BlurEffect's BACKGROUND mode does it) comes back solid
+    //    black on the NVIDIA driver whenever a maximized window is open —
+    //    DIAG 3 in roundedBlurEffect.js;
+    //  - a Clutter.Clone of global.window_group fixed that but wrecked
+    //    the whole session's rendering (DIAG 4): every window's damage
+    //    propagated into the clone, so any animation anywhere re-rendered
+    //    the entire desktop a second time through the blur, a permanently
+    //    mapped clone of every window disabled mutter's occlusion culling
+    //    stage-wide, and it forced disable_unredirect() on top.
+    // So the backdrop is now a clone of the WALLPAPER only
+    // (Main.layoutManager._backgroundGroup — the same subtree Blur my
+    // Shell samples for its panel blur, long-proven on NVIDIA). It is
+    // static: window animations no longer touch the dock's paint at all,
+    // and unredirect can stay enabled. The visual difference is nil in
+    // practice — the dock's strut keeps windows out of the strip behind
+    // the bar, so what is behind the glass is the wallpaper anyway. The
+    // effect realigns the clone on every paint so the slice visible
+    // through the panel is exactly the desktop area behind the panel; it
+    // is never painted sharp — the effect consumes the widget's content
     // and only ever emits the blurred, rounded result.
-    const backdrop = new Clutter.Clone({ source: global.window_group });
+    const backdrop = new Clutter.Clone({ source: Main.layoutManager._backgroundGroup });
     const syncBackdropSize = () => backdrop.set_size(global.stage.width, global.stage.height);
     syncBackdropSize();
     const stageWidthId = global.stage.connect('notify::width', syncBackdropSize);
