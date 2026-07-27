@@ -1390,7 +1390,29 @@ export class DockManager {
         const runningIds = new Set(runningApps.map(app => app.get_id()));
         // Closed, but recent enough that macOS would still show them.
         const recentApps = this._recentApps(favoriteIds, runningIds);
-        const trailingApps = [...runningApps, ...recentApps];
+
+        // Ordered by the persisted recents queue (stable — see
+        // _recordRecentApps()) rather than "every running app, then every
+        // closed one": that split made an app's icon jump position the
+        // instant it launched or quit, even though its place in the queue
+        // never actually moved. Apps somehow running but not yet in the
+        // queue (e.g. the preference was just raised from 0) are appended
+        // last so they still get an icon.
+        const runningById = new Map(runningApps.map(app => [app.get_id(), app]));
+        const recentById = new Map(recentApps.map(app => [app.get_id(), app]));
+        const trailingApps = [];
+        const seenTrailingIds = new Set();
+        for (const id of this._settings.getRecentApps()) {
+            const app = runningById.get(id) ?? recentById.get(id);
+            if (app) {
+                trailingApps.push(app);
+                seenTrailingIds.add(id);
+            }
+        }
+        for (const app of runningApps) {
+            if (!seenTrailingIds.has(app.get_id()))
+                trailingApps.push(app);
+        }
 
         const wantedIds = new Set([...favoriteIds, ...trailingApps.map(app => app.get_id())]);
         for (const [appId, icon] of this._appIcons) {

@@ -4,21 +4,21 @@
 
     <key name="animation-speed" type="d">
       <range min="0.5" max="2.5"/>
-      <default>1.0</default>
+      <default>2.5</default>
       <summary>Velocidade da animação</summary>
       <description>Multiplicador de velocidade aplicado às animações de mola. Valores maiores tornam a abertura/fechamento mais rápidos.</description>
     </key>
 
     <key name="blur-intensity" type="d">
       <range min="0" max="100"/>
-      <default>45.0</default>
+      <default>40.0</default>
       <summary>Intensidade do blur</summary>
       <description>Intensidade do desfoque de fundo (vidro) do painel, de 0 (sem blur) a 100 (máximo).</description>
     </key>
 
     <key name="panel-size" type="i">
       <range min="240" max="960"/>
-      <default>460</default>
+      <default>240</default>
       <summary>Tamanho do painel</summary>
       <description>Largura alvo, em pixels, do painel do stack.</description>
     </key>
@@ -47,14 +47,14 @@
         <choice value="fan"/>
         <choice value="stack"/>
       </choices>
-      <default>"grid"</default>
+      <default>"fan"</default>
       <summary>Modo de exibição</summary>
       <description>Layout usado para dispor os itens: grade, leque (fan) ou pilha.</description>
     </key>
 
     <key name="panel-opacity" type="d">
       <range min="20" max="100"/>
-      <default>88.0</default>
+      <default>30.0</default>
       <summary>Opacidade do painel</summary>
       <description>Opacidade do fundo de vidro do painel, de 20 a 100.</description>
     </key>
@@ -86,21 +86,21 @@
 
     <key name="dock-icon-size" type="i">
       <range min="36" max="96"/>
-      <default>64</default>
+      <default>48</default>
       <summary>Tamanho dos ícones da dock</summary>
       <description>Tamanho máximo, em pixels, dos ícones na barra da dock. A dock reduz os ícones automaticamente quando a fileira não cabe na largura da tela, como no macOS.</description>
     </key>
 
     <key name="dock-edge-margin" type="i">
       <range min="0" max="40"/>
-      <default>6</default>
+      <default>3</default>
       <summary>Margem da borda da tela</summary>
       <description>Distância, em pixels, entre a dock e a borda inferior da tela.</description>
     </key>
 
     <key name="dock-window-gap" type="i">
       <range min="0" max="40"/>
-      <default>0</default>
+      <default>3</default>
       <summary>Margem entre a dock e as janelas</summary>
       <description>Espaço extra, em pixels, reservado acima da dock: uma janela maximizada para essa distância antes de encostar no vidro. Não move a dock, apenas empurra as janelas para cima. Sem efeito quando "ocultar automaticamente" está ligado, pois nesse caso a dock não reserva espaço.</description>
     </key>
@@ -112,21 +112,21 @@
     </key>
 
     <key name="dock-magnification-enabled" type="b">
-      <default>true</default>
+      <default>false</default>
       <summary>Magnificação ativada</summary>
       <description>Amplia os ícones da dock conforme o cursor se aproxima, como no macOS.</description>
     </key>
 
     <key name="dock-magnification-amount" type="d">
       <range min="1.0" max="2.5"/>
-      <default>1.4</default>
+      <default>2.0</default>
       <summary>Intensidade da magnificação</summary>
       <description>Fator de escala máximo aplicado ao ícone mais próximo do cursor.</description>
     </key>
 
     <key name="dock-magnification-range" type="i">
       <range min="40" max="400"/>
-      <default>140</default>
+      <default>100</default>
       <summary>Alcance da magnificação</summary>
       <description>Raio, em pixels, de influência do cursor sobre o tamanho dos ícones vizinhos.</description>
     </key>
