@@ -52,13 +52,16 @@ const FAN_ROW_HEIGHT = 68; // vertical distance between consecutive items
 // and a measured drift of about 9px against 56px icons — 0.01 x 56 x 4^2.
 // That reference is simply too short to show much bend, and calibrating the
 // whole curve on it made a real, taller fan read as a straight column ("a
-// curvatura do leque parece que nao existe"). Raised to 0.018 so the same
-// five-row fan drifts ~16px and a full fifteen-item one reaches the 140px
-// ceiling well before its top row, which is where the arc is actually
-// visible. The quadratic shape is unchanged: the column leaves the dock
-// icon vertically and swings further out with every row it climbs.
-const FAN_ARC_UNIT = FAN_ICON_SIZE * 0.018;
-const FAN_ARC_MAX = Math.round(FAN_ICON_SIZE * 2.5);
+// curvatura do leque parece que nao existe"). Raised once to 0.018 (five-row
+// drift ~16px), then again here to 0.03 after he asked for more bend a
+// second time ("pode encurvar mais a stack de pilha") — a five-row fan now
+// drifts ~27px. FAN_ARC_MAX is scaled up by the same factor so a full
+// fifteen-item fan still hits its ceiling just before the top row, same as
+// before, instead of flattening out several rows early. The quadratic shape
+// is unchanged: the column leaves the dock icon vertically and swings
+// further out with every row it climbs.
+const FAN_ARC_UNIT = FAN_ICON_SIZE * 0.03;
+const FAN_ARC_MAX = Math.round(FAN_ICON_SIZE * 4.2);
 // How many files the fan will show. macOS switches to Grid once a folder
 // outgrows the screen; this instead keeps the fan and shows the newest
 // items, capped, with the Open in Finder row as the way to the rest — his

@@ -136,6 +136,24 @@ export class DockManager {
     }
 
     enable() {
+        // Background-mode blur (RoundedBackgroundBlurEffect, see glass.js)
+        // reads the compositor's own live framebuffer. Mutter normally
+        // bypasses that framebuffer entirely ("unredirects") for a window
+        // that covers a whole monitor with nothing else needing to be
+        // composited over it — the point of the optimisation is to let that
+        // window scan straight out to the display. But our dock IS always
+        // something composited over it, and once unredirect kicks in the
+        // desktop content our blit reads from is simply never refreshed
+        // there, which is exactly "a dock fica preta quando qualquer janela
+        // esta aberta": any maximized/fullscreen app is enough to trigger
+        // it, not just literal fullscreen. `disable_unredirect()` is the
+        // same guard other blur-dependent extensions (Blur My Shell,
+        // Dash to Dock) call for this reason — it forces the compositor to
+        // keep compositing normally for as long as our dock exists, paired
+        // with `enable_unredirect()` in disable() to give the optimisation
+        // back when we're not around to need it.
+        global.compositor.disable_unredirect();
+
         this._buildChrome();
         this._connectSignals();
         this._hideNativeDash();
@@ -164,6 +182,11 @@ export class DockManager {
     }
 
     disable() {
+        // Undoes the disable_unredirect() in enable() — see the comment
+        // there. Safe to call even if enable() never got this far, since
+        // Mutter just tracks it as a plain counter.
+        global.compositor.enable_unredirect();
+
         // Set before anything else: teardown must not start animations on
         // actors it is about to destroy. _resetMagnification() did exactly
         // that, and the springs it launched kept writing scale/translation

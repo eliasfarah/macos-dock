@@ -1,8 +1,8 @@
 /* glass.js
  *
  * Builds the layered "glass" visual used by the stack panel: a real
- * background blur (Shell.BlurEffect, the same effect GNOME Shell uses
- * for the overview search entry and the screen shield), a translucent
+ * background blur with genuinely rounded corners
+ * (RoundedBackgroundBlurEffect, see roundedBlurEffect.js), a translucent
  * tint, a subtle top sheen, and an inner border/highlight — stacked
  * with Clutter.BinLayout so they all share the panel's allocation.
  */
@@ -10,6 +10,7 @@
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
+import { RoundedBackgroundBlurEffect } from './roundedBlurEffect.js';
 
 /**
  * Creates the panel actor tree. Returns the root `panel` actor (add
@@ -43,47 +44,32 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         style_class: `${variant}-blur`,
         x_expand: true, y_expand: true,
     });
-    // A note on the bar's four corners, because this was investigated
-    // properly and the answer is a real limitation rather than a bug we
-    // still owe a fix for.
+    // A note on the bar's four corners, because two earlier attempts at
+    // this were investigated properly and failed for real, documented
+    // reasons before this third one worked. See roundedBlurEffect.js for
+    // the mechanism; the short version of the first two attempts:
     //
-    // St's `border-radius` only rounds what St itself paints (background,
-    // border, box-shadow). It has no effect on anything a Clutter *effect*
-    // draws, and Shell.BlurEffect in BACKGROUND mode paints the blurred
-    // backdrop over the actor's full rectangular allocation. So each corner
-    // shows a wedge of blurred desktop outside the rounded outline —
-    // measured on a headless capture as (0,101,255) at the corner against
-    // (0,91,239) for the desktop right beside it, i.e. a visible step,
-    // which is the "marca nas 4 pontas" report.
+    // 1. A rounded-rect mask chained in front of Shell.BlurEffect. Breaks
+    //    the blur outright: Shell.BlurEffect's BACKGROUND mode samples the
+    //    *current* framebuffer, and the mask (a ClutterOffscreenEffect)
+    //    pushes its own empty FBO in front of it first.
+    // 2. A small flat-colour "cap" over each corner, matching the tint.
+    //    Tested live: it stood out worse than the original wedge, because
+    //    the surrounding blur is textured (live desktop detail) and a flat
+    //    fill is not.
     //
-    // The standard fix — a rounded-rect mask as a Shell.GLSLEffect ahead of
-    // the blur — was implemented and then removed, because it breaks the
-    // blur outright. Shell.BlurEffect samples the *current* framebuffer,
-    // and a GLSLEffect is a ClutterOffscreenEffect that pushes its own FBO
-    // in front of it, so the blur ends up sampling an empty buffer.
-    // Measured A/B on the same bar over the same desktop, one row near the
-    // bar's foot where the backdrop is dark grey but bright blue sits just
-    // above it: unmasked (45,55,83) — blue bleeding downward, i.e. a live
-    // blur — versus masked (47,47,50), no bleed at all, just tint over the
-    // local colour. The blur is dead with the mask on.
-    //
-    // Trading a working blur for square-free corners is not a trade this
-    // codebase gets to make silently, so the corners stay as they are.
-    //
-    // Second attempt, also reverted: a small unrounded "cap" per corner,
-    // painted in the same tint colour, laid over just the wedge — the
-    // theory being that matching the *colour* would hide the seam even
-    // without a live rounded blur there. Tested live: it did the opposite.
-    // The wedge is small but the surrounding blur is textured (live desktop
-    // detail, a gradient), while a flat matching-colour square is not — so
-    // instead of a subtle colour step, each corner showed an obvious flat
-    // square sitting on top of the glass, worse than the original mismatch.
-    // Any future fix needs to preserve real blur texture in that region,
-    // not just approximate its average colour.
-    const blurEffect = new Shell.BlurEffect({
-        mode: Shell.BlurMode.BACKGROUND,
+    // The actual fix (`RoundedBackgroundBlurEffect`) doesn't touch
+    // Shell.BlurEffect at all — it's a from-scratch clone of what
+    // Shell.BlurEffect's BACKGROUND mode does internally (mirrored from
+    // GNOME Shell's own C source), with a rounded-rect discard baked into
+    // the same fragment shader pass that draws the live blurred pixels.
+    // Real blur, real rounded corners, one draw call — see that file's
+    // header comment for the full mechanism and why the other two
+    // approaches couldn't get there.
+    const blurEffect = new RoundedBackgroundBlurEffect({
         radius: 0,
         brightness: 1.0,
+        cornerRadius,
     });
     blur.add_effect(blurEffect);
 
@@ -170,10 +156,12 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
  * icon size, the way macOS does) has to restyle all five actors together
  * or end up with a rounded bar wearing a square sheen.
  */
-export function applyPanelRadius({ panel, background }, cornerRadius) {
+export function applyPanelRadius({ panel, background, blurEffect }, cornerRadius) {
     const [blur, tint, sheen, underglow, border] = background;
     panel.set_style(`border-radius: ${cornerRadius}px;`);
     blur.set_style(`border-radius: ${cornerRadius}px;`);
+    if (blurEffect)
+        blurEffect.cornerRadius = cornerRadius;
     tint.set_style(`border-radius: ${cornerRadius}px;`);
     // The rims carry the panel's full radius: each is a full-size actor
     // whose only paint is a one-pixel inset line, so the radius is what
