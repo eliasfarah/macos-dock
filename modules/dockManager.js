@@ -104,6 +104,10 @@ export class DockManager {
         this._appIcons = new Map(); // appId -> DockAppIcon
         this._stackIcons = new Map(); // stack id -> DockFolderIcon
         this._redisplayIdle = 0;
+        // How many closed-recent slots "Remover da Dock" has suppressed —
+        // see _forgetRecentApp() and _recentApps().
+        this._forgottenRecentSlots = 0;
+        this._startupRedrawIds = [];
 
         this._appSystem = Shell.AppSystem.get_default();
         this._favorites = AppFavorites.getAppFavorites();
@@ -136,22 +140,19 @@ export class DockManager {
     }
 
     enable() {
-        // Background-mode blur (RoundedBackgroundBlurEffect, see glass.js)
-        // reads the compositor's own live framebuffer. Mutter normally
-        // bypasses that framebuffer entirely ("unredirects") for a window
-        // that covers a whole monitor with nothing else needing to be
-        // composited over it — the point of the optimisation is to let that
-        // window scan straight out to the display. But our dock IS always
-        // something composited over it, and once unredirect kicks in the
-        // desktop content our blit reads from is simply never refreshed
-        // there, which is exactly "a dock fica preta quando qualquer janela
-        // esta aberta": any maximized/fullscreen app is enough to trigger
-        // it, not just literal fullscreen. `disable_unredirect()` is the
-        // same guard other blur-dependent extensions (Blur My Shell,
-        // Dash to Dock) call for this reason — it forces the compositor to
-        // keep compositing normally for as long as our dock exists, paired
-        // with `enable_unredirect()` in disable() to give the optimisation
-        // back when we're not around to need it.
+        // The glass blur (RoundedBackgroundBlurEffect, see glass.js) feeds
+        // on a live Clutter.Clone of global.window_group. Mutter normally
+        // lets a window that covers a whole monitor bypass compositing
+        // entirely ("unredirect") so it can scan straight out to the
+        // display — but an unredirected window has no up-to-date content
+        // inside the compositor's scene graph, so the clone (like the
+        // framebuffer blit this code used before it) would go stale
+        // exactly when a maximized/fullscreen app is open.
+        // `disable_unredirect()` is the same guard other blur-dependent
+        // extensions (Blur My Shell, Dash to Dock) call for this reason —
+        // it forces normal compositing for as long as our dock exists,
+        // paired with `enable_unredirect()` in disable() to give the
+        // optimisation back when we're not around to need it.
         global.compositor.disable_unredirect();
 
         this._buildChrome();
@@ -352,6 +353,22 @@ export class DockManager {
 
         this._layoutDock();
         this._updateAutohide();
+
+        // At real session start the glass panel's very first paint can
+        // land before global.window_group has anything worth cloning (see
+        // the backdrop clone in glass.js and DIAG 3 in
+        // roundedBlurEffect.js) — the blur widget then shows solid black
+        // at the corners/edges, and because nothing on an otherwise idle
+        // desktop invalidates it again, that stale first frame just sits
+        // there until *something* forces the stage to repaint, which is
+        // why opening any app "fixed" it. Forcing a few extra repaints in
+        // the seconds after build flushes that stale frame on its own
+        // instead of waiting on an unrelated event.
+        this._startupRedrawIds = [500, 1500, 3000, 6000].map(delay =>
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+                this._blurEffect?.queue_repaint();
+                return GLib.SOURCE_REMOVE;
+            }));
     }
 
     _trackStrutActor() {
@@ -599,6 +616,10 @@ export class DockManager {
     }
 
     _destroyChrome() {
+        for (const id of this._startupRedrawIds)
+            GLib.Source.remove(id);
+        this._startupRedrawIds = [];
+
         if (this._dragMonitor) {
             DND.removeDragMonitor(this._dragMonitor);
             this._dragMonitor = null;
@@ -1148,11 +1169,16 @@ export class DockManager {
      * after you quit it, and the three most recent ones are kept.
      *
      * The list is a most-recently-used queue of app ids, persisted through
-     * GSettings so it survives a logout the way the Dock's does. It is
-     * updated on every app-state change rather than only on launch,
-     * because re-focusing an already-running app should refresh its place
-     * in the queue too. Pinned apps are never recorded: they have their
-     * own section, and letting them into this one would duplicate them.
+     * GSettings so it survives a logout the way the Dock's does. Pinned
+     * apps are never recorded: they have their own section, and letting
+     * them into this one would duplicate them.
+     *
+     * Only apps that are genuinely new to the queue get inserted (at the
+     * front) — an app already somewhere in the queue keeps its existing
+     * position instead of jumping to the front just for being open right
+     * now. Re-ordering on every focus made the queue (and therefore the
+     * dock's recents section, once the app closed again) reshuffle from
+     * unrelated activity like switching back to an app you never left.
      */
     _recordRecentApps() {
         if (this._settings.dockRecentApps === 0)
@@ -1165,21 +1191,21 @@ export class DockManager {
         if (running.length === 0)
             return;
 
-        // Running apps go to the front, keeping their relative order, and
-        // the rest of the queue follows with duplicates dropped.
-        const merged = [...running];
-        for (const id of this._settings.getRecentApps()) {
-            if (!merged.includes(id) && !favouriteIds.has(id))
-                merged.push(id);
-        }
+        const stored = this._settings.getRecentApps();
+        const storedSet = new Set(stored);
+        const newIds = running.filter(id => !storedSet.has(id));
+        if (newIds.length === 0)
+            return;
+
+        // Opening an app is the only thing allowed to reclaim a slot that
+        // "Remover da Dock" suppressed — see _forgetRecentApp().
+        this._forgottenRecentSlots = Math.max(0, this._forgottenRecentSlots - newIds.length);
 
         // Trimmed generously rather than to the exact preference: lowering
         // the preference should not permanently forget apps that raising it
         // again would have shown.
-        const trimmed = merged.slice(0, RECENT_APPS_MEMORY);
-        const stored = this._settings.getRecentApps();
-        if (trimmed.length !== stored.length || trimmed.some((id, i) => id !== stored[i]))
-            this._settings.setRecentApps(trimmed);
+        const merged = [...newIds, ...stored].slice(0, RECENT_APPS_MEMORY);
+        this._settings.setRecentApps(merged);
     }
 
     /**
@@ -1194,9 +1220,14 @@ export class DockManager {
      * ("estao ficando mais de tres apps mesmo definido 3"). Running apps
      * are never dropped to make room: an open app has to stay reachable
      * from the dock whatever the setting says.
+     *
+     * `_forgottenRecentSlots` further shrinks the budget: removing a
+     * recent icon should not immediately pull an older one out of history
+     * to fill the gap, only opening another unpinned app should (see
+     * _recordRecentApps() and _forgetRecentApp()).
      */
     _recentApps(favouriteIds, runningIds) {
-        const limit = this._settings.dockRecentApps - runningIds.size;
+        const limit = this._settings.dockRecentApps - runningIds.size - this._forgottenRecentSlots;
         if (limit <= 0)
             return [];
 
@@ -1300,10 +1331,15 @@ export class DockManager {
      * If the app is running, this is deliberately a no-op on the visible
      * dock (a running app keeps its icon) — it only means the app will not
      * linger once it is closed.
+     *
+     * Also claims one slot in `_forgottenRecentSlots` so the vacated spot
+     * stays empty rather than being immediately filled by the next-oldest
+     * app in the stored queue — see _recentApps().
      */
     _forgetRecentApp(appId) {
         const remaining = this._settings.getRecentApps().filter(id => id !== appId);
         this._settings.setRecentApps(remaining);
+        this._forgottenRecentSlots++;
         this._queueRedisplay();
     }
 

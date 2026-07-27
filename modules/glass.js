@@ -43,7 +43,29 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
     const blur = new St.Widget({
         style_class: `${variant}-blur`,
         x_expand: true, y_expand: true,
+        clip_to_allocation: true,
     });
+    // What the blur effect samples. It used to sample the screen's own
+    // framebuffer (a BlitNode of the live stage, the way Shell.BlurEffect's
+    // BACKGROUND mode does) — that read comes back solid black on this
+    // machine's NVIDIA driver whenever a maximized window is open, see
+    // DIAG 3 in roundedBlurEffect.js. So instead the widget carries a live
+    // Clutter.Clone of global.window_group (wallpaper + every window — the
+    // same subtree the overview's workspace thumbnails clone), clipped to
+    // the panel; the effect realigns it on every paint so the slice visible
+    // through the panel is exactly the desktop area behind the panel. The
+    // clone is never painted sharp: the effect consumes the widget's content
+    // and only ever emits the blurred, rounded result.
+    const backdrop = new Clutter.Clone({ source: global.window_group });
+    const syncBackdropSize = () => backdrop.set_size(global.stage.width, global.stage.height);
+    syncBackdropSize();
+    const stageWidthId = global.stage.connect('notify::width', syncBackdropSize);
+    const stageHeightId = global.stage.connect('notify::height', syncBackdropSize);
+    blur.connect('destroy', () => {
+        global.stage.disconnect(stageWidthId);
+        global.stage.disconnect(stageHeightId);
+    });
+    blur.add_child(backdrop);
     // A note on the bar's four corners, because two earlier attempts at
     // this were investigated properly and failed for real, documented
     // reasons before this third one worked. See roundedBlurEffect.js for
@@ -70,6 +92,7 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         radius: 0,
         brightness: 1.0,
         cornerRadius,
+        backdrop,
     });
     blur.add_effect(blurEffect);
 
