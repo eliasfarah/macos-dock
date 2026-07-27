@@ -20,7 +20,7 @@ medida em capturas reais do Dock do macOS Tahoe, não estimada.
 ### Pela release (recomendado)
 
 ```sh
-UUID=macos-dock-stack@eliasfa.gmail.com
+UUID=macos-dock-stack@eliasfarah.github.io
 curl -LO https://github.com/eliasfarah/macos-dock/releases/latest/download/$UUID.shell-extension.zip
 gnome-extensions install --force $UUID.shell-extension.zip
 ```
@@ -28,7 +28,7 @@ gnome-extensions install --force $UUID.shell-extension.zip
 ### Pelo código-fonte
 
 ```sh
-UUID=macos-dock-stack@eliasfa.gmail.com
+UUID=macos-dock-stack@eliasfarah.github.io
 git clone https://github.com/eliasfarah/macos-dock.git
 ln -s "$PWD/macos-dock" ~/.local/share/gnome-shell/extensions/$UUID
 glib-compile-schemas ~/.local/share/gnome-shell/extensions/$UUID/schemas/
@@ -47,8 +47,8 @@ Reinicie o Shell **antes** de ativar:
 - **X11**: `Alt+F2`, `r`, Enter.
 
 ```sh
-gnome-extensions enable macos-dock-stack@eliasfa.gmail.com
-gnome-extensions prefs  macos-dock-stack@eliasfa.gmail.com
+gnome-extensions enable macos-dock-stack@eliasfarah.github.io
+gnome-extensions prefs  macos-dock-stack@eliasfarah.github.io
 ```
 
 Na página **Stacks**, o botão **+** adiciona uma pasta; ela vira um ícone na
@@ -83,13 +83,13 @@ revertido ao desativar esta; reative-o você mesmo se quiser voltar.
 
 ## Preferências
 
-`gnome-extensions prefs macos-dock-stack@eliasfa.gmail.com`, ou pelo app
+`gnome-extensions prefs macos-dock-stack@eliasfarah.github.io`, ou pelo app
 **Extensões**.
 
 ## Desinstalação
 
 ```sh
-UUID=macos-dock-stack@eliasfa.gmail.com
+UUID=macos-dock-stack@eliasfarah.github.io
 gnome-extensions disable $UUID
 rm -r ~/.local/share/gnome-shell/extensions/$UUID
 ```
@@ -127,7 +127,7 @@ isolada:
 export XDG_CONFIG_HOME=/tmp/dock-test/.config   # isola o dconf
 export XDG_DATA_HOME=$HOME/.local/share         # mantém o symlink visível
 dbus-run-session -- bash -c '
-  gsettings set org.gnome.shell enabled-extensions "[\"macos-dock-stack@eliasfa.gmail.com\"]"
+  gsettings set org.gnome.shell enabled-extensions "[\"macos-dock-stack@eliasfarah.github.io\"]"
   gnome-shell --headless --virtual-monitor 1600x900 --debug-control
 '
 ```
