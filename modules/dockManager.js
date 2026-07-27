@@ -27,6 +27,7 @@ import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import { createGlassPanel, applyPanelRadius } from './glass.js';
+import { LauncherEntryWatcher } from './launcherEntry.js';
 import { AppearanceManager, applyAppearanceClass, blurBrightnessFor } from './appearance.js';
 import { clamp, getActorGeometry } from './utils.js';
 import { animateSpring, cancelSpring, SPRING } from './animations.js';
@@ -75,6 +76,10 @@ const TOOLTIP_GAP = 10; // gap between an icon's top and its tooltip
 // How many app ids the recents queue remembers on disk, independently of
 // how many the preference currently displays — see _recordRecentApps().
 const RECENT_APPS_MEMORY = 12;
+// The floor the auto-shrink will not go below (see _effectiveIconSize).
+// Past this the icons stop being recognisable and a dock that has become
+// illegible is worse than one that is merely full.
+const DOCK_MIN_ICON_SIZE = 22;
 
 export class DockManager {
     constructor(settings, onActivateFolder, onOpenPreferences) {
@@ -121,6 +126,13 @@ export class DockManager {
         this._dockHidden = false;
 
         this._dragIcon = null;
+
+        this._iconSizeCacheKey = null;
+        this._iconSizeCache = 0;
+        this._appliedIconSize = 0;
+        this._layingOut = false;
+        this._launcherEntries = null;
+        this._dragMonitor = null;
     }
 
     enable() {
@@ -128,7 +140,27 @@ export class DockManager {
         this._connectSignals();
         this._hideNativeDash();
         this._enableMagnification();
+
+        // Real, app-published progress for the dock icons (see
+        // modules/launcherEntry.js for why this is the only channel that
+        // carries a genuine total).
+        this._launcherEntries = new LauncherEntryWatcher(
+            (appId, entry) => this._onLauncherEntry(appId, entry));
+        this._launcherEntries.enable();
+
         this._queueRedisplay();
+    }
+
+    /**
+     * Applies one app's published progress straight to its icon, without a
+     * full redisplay: a transfer emits this signal several times a second
+     * and rebuilding the whole row at that rate would be absurd.
+     */
+    _onLauncherEntry(appId, entry) {
+        const icon = this._appIcons.get(appId);
+        icon?.setProgress(entry.progress);
+        if (entry.urgent)
+            icon?.attentionBounce();
     }
 
     disable() {
@@ -142,6 +174,9 @@ export class DockManager {
         this._restoreNativeDash();
         this._disableMagnification();
         this._disconnectSignals();
+
+        this._launcherEntries?.disable();
+        this._launcherEntries = null;
 
         if (this._redisplayIdle) {
             GLib.Source.remove(this._redisplayIdle);
@@ -541,6 +576,11 @@ export class DockManager {
     }
 
     _destroyChrome() {
+        if (this._dragMonitor) {
+            DND.removeDragMonitor(this._dragMonitor);
+            this._dragMonitor = null;
+        }
+
         if (this._monitorsChangedId) {
             Main.layoutManager.disconnect(this._monitorsChangedId);
             this._monitorsChangedId = 0;
@@ -598,9 +638,58 @@ export class DockManager {
         return this._appearance?.scheme ?? 'dark';
     }
 
+    /**
+     * The icon size actually used, which is the preference *or* less.
+     *
+     * macOS shrinks its Dock's icons as you pin more to it, so the bar
+     * never runs off the screen — the preference is the size you get when
+     * there is room for it, not a fixed size. Ours simply kept the
+     * preferred size and let the row overflow the glass (and then the
+     * monitor) once enough icons were pinned, which is what "se o usuario
+     * inserir muitos pin de apps como vai se comportar" is about.
+     *
+     * Solved by search rather than algebra: the row's width is not a linear
+     * function of the icon size, because both the inter-icon spacing and
+     * the bar's padding are clamped to fixed pixel ranges, so there are
+     * flat regions where shrinking the icons does not narrow the row by the
+     * proportional amount. Walking down one pixel at a time from the
+     * preference is exact, bounded (at most ~70 steps of integer maths) and
+     * only ever runs on a layout pass, never per frame.
+     */
+    _effectiveIconSize() {
+        const preferred = this._settings.dockIconSize;
+        const monitorIndex = Main.layoutManager.primaryIndex;
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
+        if (!workArea)
+            return preferred;
+
+        const available = workArea.width - this._settings.dockEdgeMargin * 2;
+        // Memoised on everything the search actually depends on. A single
+        // layout pass asks for this several times over (metrics, the row
+        // rebuild, the stack rebuild), and 'workareas-changed' can bring a
+        // couple of extra passes with it — without the cache that is a few
+        // hundred redundant iterations for an answer that cannot have
+        // changed in between.
+        const key = `${preferred}|${available}|${this._appIcons.size}|${this._stackIcons.size}` +
+            `|${this._sepRunning?.visible}|${this._sepTrailing?.visible}`;
+        if (this._iconSizeCacheKey === key)
+            return this._iconSizeCache;
+
+        let result = DOCK_MIN_ICON_SIZE;
+        for (let size = preferred; size > DOCK_MIN_ICON_SIZE; size--) {
+            if (this._naturalRowWidth(this._dockMetrics(size)) <= available) {
+                result = size;
+                break;
+            }
+        }
+        this._iconSizeCacheKey = key;
+        this._iconSizeCache = result;
+        return result;
+    }
+
     /** Every proportional measurement of the bar, derived from icon size. */
-    _dockMetrics() {
-        const iconSize = this._settings.dockIconSize;
+    _dockMetrics(overrideIconSize = null) {
+        const iconSize = overrideIconSize ?? this._effectiveIconSize();
         const padding = clamp(Math.round(iconSize * PADDING_RATIO), ...PADDING_RANGE);
         const height = iconSize + padding * 2;
         return {
@@ -622,6 +711,12 @@ export class DockManager {
      * they have to change the moment the icon-size preference does.
      */
     _applyDockMetrics(metrics) {
+        // The row may have been auto-shrunk since the icons were built (a
+        // newly pinned app can push it past the screen's width), so the
+        // size is pushed down here on every layout rather than only when
+        // the preference changes.
+        this._applyIconSize(metrics.iconSize);
+
         // One spacing value everywhere — the outer row and the two inner
         // section boxes — so the gap between two apps is the same as the
         // gap between the last app and the divider. They used to differ
@@ -693,9 +788,23 @@ export class DockManager {
     }
 
     _layoutDock() {
-        if (!this._dockActor)
+        if (!this._dockActor || this._layingOut)
             return;
 
+        // Re-entrancy guard. _layoutDock() resizes the strut actor, which
+        // makes ui/layout.js recompute struts, which emits
+        // 'workareas-changed', which this class now listens to — without
+        // this, a single settings change could recurse straight back into
+        // the middle of its own layout pass.
+        this._layingOut = true;
+        try {
+            this._layoutDockInner();
+        } finally {
+            this._layingOut = false;
+        }
+    }
+
+    _layoutDockInner() {
         const metrics = this._dockMetrics();
         this._applyDockMetrics(metrics);
 
@@ -753,14 +862,68 @@ export class DockManager {
         // it satisfies the "touches an entire edge" condition the strut
         // algorithm requires, regardless of how narrow/centered/margined
         // the visible dock bar itself is.
+        //
+        // It starts `dockWindowGap` px *above* the bar rather than at its
+        // top edge. The strut is what decides where a maximized window
+        // stops, and with the strut flush against the glass a maximized
+        // window's own edge touched the dock with no gap at all — the
+        // "colada" in his report, and the reason for the new preference.
+        // Purely a strut change: the visible bar does not move, so raising
+        // the gap pushes windows up rather than pushing the dock down.
         if (this._strutActor && monitor) {
-            const stripY = Math.round(y);
+            const stripY = Math.round(y) - this._settings.dockWindowGap;
             const stripHeight = Math.round(monitor.y + monitor.height - stripY);
             this._strutActor.set_position(monitor.x, stripY);
             this._strutActor.set_size(monitor.width, Math.max(0, stripHeight));
         }
 
         this._layoutAutohideStrip();
+    }
+
+    /**
+     * Re-runs the layout once the monitor configuration has actually
+     * settled.
+     *
+     * `_layoutDock()` is already immune to the strut feedback loop (it
+     * anchors to the monitor rect, never to the work area), but it can
+     * still run *before* the monitor list is meaningful — at enable() time
+     * during login, ui/layout.js may not have finished its own monitor
+     * setup, and `Main.layoutManager.monitors[primaryIndex]` is then
+     * undefined. The dock lands using the work-area fallback, and because
+     * nothing afterwards asked it to try again, that one bad position
+     * simply persisted for the rest of the session: the bar sat flush
+     * against the screen edge with no margin until some unrelated
+     * preference change happened to re-trigger a layout, at which point it
+     * silently corrected itself. That is exactly the "dock parece que ta
+     * andando sozinha" report — it was not moving on its own, it was stuck
+     * wrong and then got fixed by the next settings write.
+     *
+     * Two cheap subscriptions close it: 'workareas-changed' fires whenever
+     * any strut on the display changes (including other panels' and our
+     * own), and 'startup-complete' fires once the shell has finished
+     * bringing the session up. Both verified to exist on this version —
+     * 'workareas-changed' is on global.display (ui/panel.js and
+     * ui/workspace.js use it), 'startup-complete' is declared in
+     * LayoutManager's own Signals block.
+     *
+     * Feeding our own strut change back in as a 'workareas-changed' cannot
+     * run away: _layoutDock() derives its geometry from the *monitor* rect,
+     * never from the work area, so the second pass computes the identical
+     * position and size, writes the same values, produces no allocation
+     * change and therefore no further 'workareas-changed'. It settles after
+     * one extra pass. (A re-entrancy guard in _layoutDock() covers the
+     * synchronous case separately.)
+     */
+    _connectLayoutStability() {
+        this._objectSignals.push(
+            {
+                object: global.display,
+                id: global.display.connect('workareas-changed', () => this._layoutDock()),
+            },
+            {
+                object: Main.layoutManager,
+                id: Main.layoutManager.connect('startup-complete', () => this._layoutDock()),
+            });
     }
 
     // -- live updates ------------------------------------------------------
@@ -772,6 +935,7 @@ export class DockManager {
             { object: this._appSystem, id: this._appSystem.connect('app-state-changed', () => this._queueRedisplay()) },
         );
         this._settingsChangedId = this._settings.connectChanged((_s, key) => this._onSettingChanged(key));
+        this._connectLayoutStability();
 
         this._objectSignals.push({
             object: global.display,
@@ -893,10 +1057,8 @@ export class DockManager {
             this._queueRedisplay();
             break;
         case 'dock-icon-size':
-            this._applyIconSize();
-            this._layoutDock();
-            break;
         case 'dock-edge-margin':
+        case 'dock-window-gap':
             this._layoutDock();
             break;
         case 'appearance':
@@ -923,8 +1085,12 @@ export class DockManager {
         }
     }
 
-    _applyIconSize() {
-        const iconSize = this._settings.dockIconSize;
+    _applyIconSize(size = null) {
+        const iconSize = size ?? this._effectiveIconSize();
+        if (this._appliedIconSize === iconSize)
+            return;
+        this._appliedIconSize = iconSize;
+
         for (const icon of this._appIcons.values())
             icon.icon.setIconSize(iconSize);
         for (const icon of this._stackIcons.values())
@@ -993,10 +1159,22 @@ export class DockManager {
             this._settings.setRecentApps(trimmed);
     }
 
-    /** Recently-used, currently-closed apps still worth a dock icon. */
+    /**
+     * Recently-used, currently-closed apps still worth a dock icon.
+     *
+     * The preference is a budget for the whole unpinned section, not just
+     * for its closed half. macOS' recents area is a fixed number of slots
+     * that a running unpinned app occupies while it is open and gives back
+     * when it quits — so with the preference at 3 and three unpinned apps
+     * running, no closed app is shown at all. Counting only closed apps
+     * against the limit is what put more than three icons past the divider
+     * ("estao ficando mais de tres apps mesmo definido 3"). Running apps
+     * are never dropped to make room: an open app has to stay reachable
+     * from the dock whatever the setting says.
+     */
     _recentApps(favouriteIds, runningIds) {
-        const limit = this._settings.dockRecentApps;
-        if (limit === 0)
+        const limit = this._settings.dockRecentApps - runningIds.size;
+        if (limit <= 0)
             return [];
 
         const apps = [];
@@ -1039,7 +1217,7 @@ export class DockManager {
             }
         }
 
-        const iconSize = this._settings.dockIconSize;
+        const iconSize = this._effectiveIconSize();
         const iconFor = app => {
             const appId = app.get_id();
             let icon = this._appIcons.get(appId);
@@ -1071,6 +1249,39 @@ export class DockManager {
 
         for (const app of trailingApps)
             this._appsBox.set_child_at_index(iconFor(app), index++);
+
+        // Run after the row is built, so icons created by iconFor() in this
+        // same pass are covered too.
+        //
+        // "Remover da Dock" is offered only on icons that are on the dock
+        // *purely* because the app was used recently — a pinned app is
+        // removed by unpinning it (GNOME's own menu item, which AppMenu
+        // already shows), and a running one cannot be removed at all while
+        // it is open. Without this there was no way to take a recent app
+        // off the dock at all. See DockAppIcon.popupMenu().
+        const recentIds = new Set(recentApps.map(app => app.get_id()));
+        for (const [appId, icon] of this._appIcons) {
+            icon.removeAction = recentIds.has(appId)
+                ? () => this._forgetRecentApp(appId)
+                : null;
+            icon.setProgress(this._launcherEntries?.entries.get(appId)?.progress ?? -1);
+        }
+    }
+
+    /**
+     * Drops an app from the recents queue for good. Removing it from the
+     * *stored* list rather than from the visible row is what makes it
+     * stick: the row is rebuilt from that list on every redisplay, so
+     * hiding the icon alone would bring it straight back.
+     *
+     * If the app is running, this is deliberately a no-op on the visible
+     * dock (a running app keeps its icon) — it only means the app will not
+     * linger once it is closed.
+     */
+    _forgetRecentApp(appId) {
+        const remaining = this._settings.getRecentApps().filter(id => id !== appId);
+        this._settings.setRecentApps(remaining);
+        this._queueRedisplay();
     }
 
     _redisplayStacks() {
@@ -1084,7 +1295,7 @@ export class DockManager {
             }
         }
 
-        const iconSize = this._settings.dockIconSize;
+        const iconSize = this._effectiveIconSize();
         configs.forEach((config, index) => {
             let icon = this._stackIcons.get(config.id);
             if (!icon) {
@@ -1336,6 +1547,25 @@ export class DockManager {
     // pinned yet — the same thing the native Dash does.
 
     _installDropTargets() {
+        // A drag that starts inside an open stack panel is owned by that
+        // Stack, not by us, so DockManager's own 'drag-end' wiring never
+        // sees it — and ui/dnd.js has no "pointer left this target" call
+        // at all. A global drag monitor is the one hook that runs on every
+        // motion of every drag: clear the highlight here, and the target
+        // walk immediately afterwards re-adds it to whichever icon is
+        // actually under the pointer. CONTINUE so the walk still happens.
+        this._dragMonitor = {
+            dragMotion: () => {
+                this._clearDropFeedback();
+                return DND.DragMotionResult.CONTINUE;
+            },
+            dragDrop: () => {
+                this._clearDropFeedback();
+                return DND.DragDropResult.CONTINUE;
+            },
+        };
+        DND.addDragMonitor(this._dragMonitor);
+
         this._appsBox._delegate = {
             handleDragOver: (source, actor, x) => this._onAppsDragOver(source, x),
             acceptDrop: (source, actor, x) => this._onAppsDrop(source, x),
@@ -1369,10 +1599,23 @@ export class DockManager {
 
     _onDragFinished() {
         this._dragIcon = null;
+        this._clearDropFeedback();
         // Any live preview reordering is thrown away and the row rebuilt
         // from the model, so the actors can never drift out of sync with
         // what is actually saved.
         this._queueRedisplay();
+    }
+
+    /**
+     * ui/dnd.js calls handleDragOver as the pointer moves but never tells a
+     * target the pointer has left it, so the highlight a target adds has to
+     * be cleared from the outside. Every icon is cleared rather than only
+     * the last-highlighted one: a fast drag can light up several before any
+     * of them is picked again.
+     */
+    _clearDropFeedback() {
+        for (const icon of this._magnifiableIcons())
+            icon.clearDropFeedback?.();
     }
 
     _droppedAwayFromDock() {
@@ -1391,10 +1634,15 @@ export class DockManager {
         const icon = this._dragIcon;
         const appId = icon.app?.get_id();
         if (appId) {
-            // Only pinned apps have anything to remove; a running,
-            // unpinned app just snaps back.
             if (this._favorites.getFavoriteMap()[appId])
                 this._favorites.removeFavorite(appId);
+            else
+                // Not pinned, so there is no favourite to remove — but it
+                // may still be on the dock as a recent app, and dragging an
+                // icon off the Dock is macOS' own gesture for taking it
+                // away. Without this the icon simply sprang back, which is
+                // half of why recents felt impossible to get rid of.
+                this._forgetRecentApp(appId);
         } else if (icon.config) {
             this._settings.removeStack(icon.config.id);
         }

@@ -297,13 +297,30 @@
   padding: 0;
   border-radius: 10px;
   background-color: transparent;
+  box-shadow: none;
+  icon-shadow: none;
 }
 
+/* Zeroing background-color alone was not enough. The shell theme (and any
+ * third-party theme the user may have installed) also puts a `box-shadow`
+ * on these states — GNOME's own `.overview-tile:drop` draws an inset ring,
+ * and several popular themes give the tile a drop shadow on hover. St
+ * renders a box-shadow from the actor's *border box*, which on a
+ * transparent-background button still produces a visible soft rectangle
+ * behind the icon: the "sombra ao passar o mouse" report. Since a rule
+ * that is merely absent lets the theme win, every shadow property has to
+ * be explicitly cancelled here, not just left unset. `icon-shadow` is a
+ * separate St property applied to the icon texture itself, so it needs its
+ * own reset. */
 .macos-dock-app-icon.overview-tile:hover,
 .macos-dock-app-icon.overview-tile:active,
 .macos-dock-app-icon.overview-tile:checked,
 .macos-dock-app-icon.overview-tile:selected,
 .macos-dock-app-icon.overview-tile:highlighted,
+.macos-dock-app-icon.overview-tile:drop,
+.macos-dock-app-icon.overview-tile:hover .overview-icon,
+.macos-dock-app-icon.overview-tile:active .overview-icon,
+.macos-dock-app-icon.overview-tile:checked .overview-icon,
 .macos-dock-trash-icon:hover,
 .macos-dock-folder-icon:hover,
 .macos-dock-show-apps-icon:hover,
@@ -311,6 +328,22 @@
 .macos-dock-folder-icon:active,
 .macos-dock-show-apps-icon:active {
   background-color: transparent;
+  box-shadow: none;
+  icon-shadow: none;
+  border: none;
+}
+
+/* The one exception: a drop target still has to be identifiable, but as an
+ * outline rather than as a shadow — this is the "drag a file onto the
+ * Trash / onto an app" feedback, and with every shadow cancelled above
+ * there would otherwise be no indication at all that the drop will land. */
+.macos-dock-drop-target {
+  background-color: rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+}
+
+.macos-appearance-light .macos-dock-drop-target {
+  background-color: rgba(0, 0, 0, 0.12);
 }
 
 /* The download progress bar drawn across the foot of a folder-stack icon

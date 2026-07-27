@@ -124,6 +124,8 @@ class DockFolderIcon extends St.Button {
         this._progressId = 0;
         this._pollGeneration = 0;
         this._sweepDuration = 0;
+        this._progressCancellable = null;
+        this._destroyed = false;
 
         this.set_child(this._preview);
         this._rebuild();
@@ -136,6 +138,16 @@ class DockFolderIcon extends St.Button {
         this._refresh();
 
         this.connect('destroy', () => {
+            // Set FIRST. Everything below is synchronous, but the progress
+            // poll has query_info_async calls that may already be in flight,
+            // and their callbacks run after this handler with `this` pointing
+            // at a disposed GObject — reading this.get_stage() or
+            // this._progressTrack.width there is a Gjs-CRITICAL per
+            // outstanding transfer. The cancellable stops most of them; this
+            // flag covers the ones already past the point of cancelling.
+            this._destroyed = true;
+            this._progressCancellable?.cancel();
+            this._progressCancellable = null;
             this._stopWatching();
             this._cancelPendingRefresh();
             this._stopSweep();
@@ -168,8 +180,10 @@ class DockFolderIcon extends St.Button {
         const path = this.config.path;
         listDirectory(path, entries => {
             // The folder may have been reconfigured, or the icon destroyed,
-            // while the enumeration was in flight.
-            if (!this.get_stage() || this.config.path !== path)
+            // while the enumeration was in flight. `_destroyed` is checked
+            // before get_stage(), because calling any method on an already-
+            // disposed GObject is itself the critical we are avoiding.
+            if (this._destroyed || !this.get_stage() || this.config.path !== path)
                 return;
             this._entries = entries;
             this._rebuild();
@@ -352,10 +366,17 @@ class DockFolderIcon extends St.Button {
     }
 
     _pollProgress() {
-        if (this._downloads.size === 0 || !this.get_stage()) {
+        if (this._destroyed || this._downloads.size === 0 || !this.get_stage()) {
             this._stopProgress();
             return;
         }
+
+        // A fresh cancellable per tick, so the previous tick's queries are
+        // abandoned rather than piling up if the filesystem is slow (a
+        // network mount, a spun-down disk). Cancelled on destroy too.
+        this._progressCancellable?.cancel();
+        this._progressCancellable = new Gio.Cancellable();
+        const cancellable = this._progressCancellable;
 
         // One query per transfer, all in flight together; the draw happens
         // once, when the last of them has answered, so a folder with three
@@ -363,15 +384,17 @@ class DockFolderIcon extends St.Button {
         let outstanding = this._downloads.size;
         const generation = ++this._pollGeneration;
         const done = () => {
-            if (--outstanding === 0 && generation === this._pollGeneration)
+            if (--outstanding === 0 && generation === this._pollGeneration && !this._destroyed)
                 this._drawProgress();
         };
 
         for (const [path, state] of this._downloads) {
             Gio.File.new_for_path(path).query_info_async(
                 'standard::size,unix::blocks',
-                Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null,
+                Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, cancellable,
                 (source, result) => {
+                    if (this._destroyed)
+                        return;
                     let info = null;
                     try {
                         info = source.query_info_finish(result);
@@ -561,12 +584,45 @@ class DockFolderIcon extends St.Button {
         this._rebuild();
     }
 
-    // Dock reordering only — no app-grid-folder drop semantics apply here.
-    handleDragOver() {
-        return DND.DragMotionResult.CONTINUE;
+    // -- drop target -------------------------------------------------------
+    //
+    // A file dragged out of an open stack can be dropped on another stack's
+    // dock icon to move it into that folder, the way one Finder stack's
+    // contents can be dragged into another folder. Anything else (a dock
+    // icon being dragged to reorder) returns CONTINUE/false so ui/dnd.js
+    // keeps walking up to DockManager's own box-level handlers.
+
+    handleDragOver(source) {
+        if (!source?.stackEntryUri || source.stackFolderPath === this.config.path)
+            return DND.DragMotionResult.CONTINUE;
+        this.add_style_class_name('macos-dock-drop-target');
+        return DND.DragMotionResult.MOVE_DROP;
     }
 
-    acceptDrop() {
-        return false;
+    acceptDrop(source) {
+        this.clearDropFeedback();
+        if (!source?.stackEntryUri || source.stackFolderPath === this.config.path)
+            return false;
+
+        const from = Gio.File.new_for_uri(source.stackEntryUri);
+        const to = Gio.File.new_for_path(
+            GLib.build_filenamev([this.config.path, from.get_basename()]));
+        // NONE, not OVERWRITE: silently replacing a same-named file in the
+        // destination folder is not something a drag gesture should be able
+        // to do without asking. G_IO_ERROR_EXISTS is logged and the file
+        // stays where it was.
+        from.move_async(to, Gio.FileCopyFlags.NONE, GLib.PRIORITY_DEFAULT,
+            null, null, (obj, result) => {
+                try {
+                    obj.move_finish(result);
+                } catch (error) {
+                    logError(error, 'macOS Dock Stack: failed to move item into folder');
+                }
+            });
+        return true;
+    }
+
+    clearDropFeedback() {
+        this.remove_style_class_name('macos-dock-drop-target');
     }
 });

@@ -14,6 +14,7 @@ import Gio from 'gi://Gio';
 import Pango from 'gi://Pango';
 import Graphene from 'gi://Graphene';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 
 import { SPRING, animateSpring, animateStagger, cancelSpring } from './animations.js';
 import { createGlassPanel, createShadowActor } from './glass.js';
@@ -46,12 +47,17 @@ const FAN_ROW_HEIGHT = 68; // vertical distance between consecutive items
 // a flat per-row lean either looks like nothing on a five-item fan or like a
 // diagonal on a fifteen-item one.
 //
-// The unit is calibrated on the reference shot, which has four folders plus
-// the Open in Finder cap: five rows, i.e. a top index of 4, and a measured
-// drift of about 9px against 56px icons. 0.01 x 56 x 4^2 = 9. A full
-// fifteen-item fan then reaches 0.56 x 15^2 = 126px, which is the visible
-// curve the reference is too short to show. The cap keeps it there.
-const FAN_ARC_UNIT = FAN_ICON_SIZE * 0.01;
+// The unit was first calibrated on the reference shot, which has four
+// folders plus the Open in Finder cap: five rows, i.e. a top index of 4,
+// and a measured drift of about 9px against 56px icons — 0.01 x 56 x 4^2.
+// That reference is simply too short to show much bend, and calibrating the
+// whole curve on it made a real, taller fan read as a straight column ("a
+// curvatura do leque parece que nao existe"). Raised to 0.018 so the same
+// five-row fan drifts ~16px and a full fifteen-item one reaches the 140px
+// ceiling well before its top row, which is where the arc is actually
+// visible. The quadratic shape is unchanged: the column leaves the dock
+// icon vertically and swings further out with every row it climbs.
+const FAN_ARC_UNIT = FAN_ICON_SIZE * 0.018;
 const FAN_ARC_MAX = Math.round(FAN_ICON_SIZE * 2.5);
 // How many files the fan will show. macOS switches to Grid once a folder
 // outgrows the screen; this instead keeps the fan and shows the newest
@@ -70,6 +76,11 @@ const FAN_GAP = 8; // clearance between the dock icon and the first fan item
 // them exactly, so it read as a big grey disc dominating the top of the
 // fan instead of as a small badge finishing it off.
 const FAN_FINDER_SIZE = Math.round(FAN_ICON_SIZE * 0.6);
+
+// Size of the ghost that follows the pointer when a file is dragged out of
+// an open stack. Matched to the Fan's own icon size so the ghost reads as
+// the item you grabbed rather than as a new, differently-scaled thing.
+const DRAG_ICON_SIZE = FAN_ICON_SIZE;
 
 const LABEL_MAX_HEIGHT = 30; // ~2 lines at the label's 11px font size
 const PANEL_MARGIN = 16;
@@ -201,6 +212,17 @@ export class Stack {
                         // input path) rather than destroyed, so
                         // reopening the same stack reuses the glass
                         // panel instead of rebuilding it from scratch.
+                        //
+                        // The stagger timeout ids are not: every open/close
+                        // pair appended a dozen more to this array and only
+                        // destroyStack() ever emptied it, so a stack opened
+                        // repeatedly across a session accumulated ids for
+                        // sources that had long since fired and removed
+                        // themselves. Harmless individually, unbounded in
+                        // aggregate — and it made destroyStack() walk a list
+                        // of thousands of stale ids looking each one up in
+                        // the main context.
+                        this._timeouts = [];
                     },
                 });
 
@@ -681,11 +703,62 @@ export class Stack {
     }
 
     _createItemActor(entry) {
+        let item;
         if (this._mode === 'stack')
-            return this._createListRowActor(entry);
-        if (this._mode === 'fan')
-            return this._createFanRowActor(entry);
-        return this._createTileActor(entry);
+            item = this._createListRowActor(entry);
+        else if (this._mode === 'fan')
+            item = this._createFanRowActor(entry);
+        else
+            item = this._createTileActor(entry);
+        this._makeEntryDraggable(item, entry);
+        return item;
+    }
+
+    /**
+     * Lets a file be dragged straight out of an open stack, the way a
+     * macOS stack's contents can be dragged onto the Trash or onto another
+     * app in the Dock. Wired here rather than in each of the three item
+     * builders so the three views can never drift apart on this.
+     *
+     * What this is NOT: a drag into another *application's* window. GNOME
+     * Shell's DND (ui/dnd.js) is entirely internal to the compositor
+     * process — it has no bridge to the Wayland data-device protocol, so
+     * there is no way for an extension to hand a drag off to a client
+     * window the way the Finder hands one to another Mac app. Everything
+     * the shell itself draws is reachable; nothing a client draws is.
+     */
+    _makeEntryDraggable(item, entry) {
+        // ui/dnd.js reads getDragActor/getDragActorSource off
+        // `actor._delegate`, and passes that same object to a drop
+        // target's acceptDrop as `source`. So the delegate is the item
+        // itself, and the two `stack*` properties below are the contract
+        // the dock's drop targets match on (see dockTrashIcon.js,
+        // dockAppIcon.js, dockFolderIcon.js).
+        item._delegate = item;
+        item.stackEntryUri = entry.uri;
+        item.stackFolderPath = this.config.path;
+
+        // A lightweight clone follows the pointer, so the real item is
+        // never reparented out of the panel's grid mid-drag — the same
+        // reason DockFolderIcon does this.
+        item.getDragActor = () => new St.Icon({
+            gicon: this._iconForEntry(entry),
+            icon_size: DRAG_ICON_SIZE,
+        });
+        item.getDragActorSource = () => item;
+
+        const draggable = DND.makeDraggable(item, { timeoutThreshold: 200 });
+        // macOS closes the stack the moment you pull an item out of it, and
+        // here that is load-bearing rather than cosmetic: _grabInput()
+        // parks a full-screen reactive click catcher over the desktop, and
+        // ui/dnd.js resolves drop targets with
+        // get_actor_at_pos(PickMode.ALL, …) — which that catcher would win
+        // for every drop, everywhere on screen. closeStack() calls
+        // _releaseInput(), which destroys it. Item actors are only parked
+        // (never destroyed) by a close, so `item` stays valid for the rest
+        // of the drag.
+        draggable.connect('drag-begin', () => this.closeStack());
+        item._entryDraggable = draggable;
     }
 
     /** One row of the List view: small icon, then the name beside it. */

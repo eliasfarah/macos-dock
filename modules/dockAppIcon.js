@@ -9,12 +9,14 @@
  */
 
 import GObject from 'gi://GObject';
+import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import Shell from 'gi://Shell';
 import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 
 import { animateSpring, SPRING } from './animations.js';
+import { openWithApp } from './utils.js';
 
 // macOS' launch bounce lifts the icon by roughly a third of its own
 // height, so the gesture reads the same whether the Dock is set small or
@@ -53,11 +55,120 @@ class DockAppIcon extends AppDisplay.AppIcon {
         this.add_style_class_name('macos-dock-app-icon');
 
         this._launchBouncing = false;
+        // Filled in by DockManager. `removeAction` is what backs the
+        // "Remover da Dock" item on icons that are only present because the
+        // app was used recently; `progress` is the Unity LauncherEntry
+        // progress bar (see setProgress).
+        this.removeAction = null;
+        this._removeItem = null;
+        this._progressTrack = null;
+        this._progressFill = null;
+        this._progress = -1;
 
         // AppIcon's own base class already listens for 'notify::state' to
         // show/hide the running dot — this is an additional, independent
         // listener for the same signal, just for the launch bounce.
         this.app.connectObject('notify::state', () => this._onStateChanged(), this);
+    }
+
+    /**
+     * macOS lets you take any Dock icon off the Dock, including one that is
+     * only there because you happened to launch the app — the recents
+     * section is not a read-only shelf. Ours had no way to do that at all:
+     * the app was not pinned, so "Unpin" (GNOME's own item) was hidden, and
+     * nothing else removed it from our recents queue.
+     *
+     * AppMenu builds itself once and is then reused, so the item is added
+     * on the menu's first construction and its visibility re-evaluated on
+     * every popup — `removeAction` is null for pinned and running apps,
+     * which is exactly when the item should not be offered.
+     */
+    popupMenu() {
+        const result = super.popupMenu();
+        if (this._menu && !this._removeItem) {
+            this._removeItem = this._menu.addAction('Remover da Dock', () => {
+                this.removeAction?.();
+            });
+        }
+        if (this._removeItem)
+            this._removeItem.visible = !!this.removeAction;
+        return result;
+    }
+
+    /**
+     * A real 0..1 progress bar across the icon's foot, the way the macOS
+     * Dock draws one for an app that reports progress. Driven by the
+     * `com.canonical.Unity.LauncherEntry` D-Bus protocol (see
+     * modules/launcherEntry.js) — the standard, app-published channel on
+     * this desktop, and the only one that carries a genuine total. Pass a
+     * negative value to hide it.
+     */
+    setProgress(fraction) {
+        if (fraction === this._progress)
+            return;
+        this._progress = fraction;
+
+        if (fraction < 0) {
+            this._progressTrack?.hide();
+            return;
+        }
+
+        if (!this._progressTrack) {
+            // Built lazily: the overwhelming majority of dock icons never
+            // report progress, and an always-present pair of hidden actors
+            // on each of them is pure allocation for nothing.
+            this._progressTrack = new St.Widget({
+                style_class: 'macos-dock-progress-track',
+                layout_manager: new Clutter.BinLayout(),
+            });
+            this._progressFill = new St.Widget({
+                style_class: 'macos-dock-progress-fill',
+                x_align: Clutter.ActorAlign.START,
+                y_align: Clutter.ActorAlign.FILL,
+            });
+            this._progressTrack.add_child(this._progressFill);
+            this.add_child(this._progressTrack);
+        }
+
+        const size = this.icon?.iconSize ?? 48;
+        const width = Math.round(size * 0.86);
+        const height = Math.max(4, Math.round(size * 0.13));
+        this._progressTrack.set_size(width, height);
+        this._progressTrack.set_position(
+            Math.round((this.width - width) / 2), Math.round(this.height - height));
+        this._progressFill.set_width(
+            Math.max(1, Math.round((width - 2) * Math.min(1, Math.max(0, fraction)))));
+        this._progressFill.set_position(1, 1);
+        this._progressFill.set_height(Math.max(1, height - 2));
+        this._progressTrack.show();
+    }
+
+    /**
+     * Dropping a file on an app icon opens it with that app, which is what
+     * the macOS Dock does. Returning MOVE_DROP/COPY_DROP here is also what
+     * makes ui/dnd.js draw the drop feedback while the pointer is over us.
+     */
+    handleDragOver(source) {
+        // CONTINUE for anything that isn't a file from an open stack, so
+        // ui/dnd.js keeps walking up to _appsBox — which is what implements
+        // drag-to-reorder. Returning anything else here would swallow the
+        // reorder drag at the first icon it passed over.
+        if (!source?.stackEntryUri)
+            return DND.DragMotionResult.CONTINUE;
+        this.add_style_class_name('macos-dock-drop-target');
+        return DND.DragMotionResult.COPY_DROP;
+    }
+
+    acceptDrop(source) {
+        this.clearDropFeedback();
+        if (!source?.stackEntryUri)
+            return false;
+        openWithApp(this.app, source.stackEntryUri);
+        return true;
+    }
+
+    clearDropFeedback() {
+        this.remove_style_class_name('macos-dock-drop-target');
     }
 
     _onStateChanged() {
@@ -142,16 +253,5 @@ class DockAppIcon extends AppDisplay.AppIcon {
     }
 
     undoScaleAndFade() {
-    }
-
-    // Per-icon drop targets are handled by DockManager's own reorder
-    // logic (added in a later phase), not by AppIcon's app-grid-folder
-    // drop semantics.
-    handleDragOver() {
-        return DND.DragMotionResult.CONTINUE;
-    }
-
-    acceptDrop() {
-        return false;
     }
 });

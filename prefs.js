@@ -72,11 +72,17 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
         page.add(layoutGroup);
         layoutGroup.add(this._spinRow(gsettings, 'dock-icon-size', {
             title: _('Tamanho dos ícones'),
-            subtitle: _('Tamanho, em pixels, dos ícones na barra da dock'),
+            subtitle: _('Tamanho máximo, em pixels: a dock reduz os ícones sozinha se não couberem na tela'),
             lower: 36, upper: 96, step: 2, digits: 0,
         }));
         layoutGroup.add(this._spinRow(gsettings, 'dock-edge-margin', {
             title: _('Margem da borda da tela'),
+            subtitle: _('Distância entre a dock e a borda inferior do monitor'),
+            lower: 0, upper: 40, step: 1, digits: 0,
+        }));
+        layoutGroup.add(this._spinRow(gsettings, 'dock-window-gap', {
+            title: _('Margem entre a dock e as janelas'),
+            subtitle: _('Espaço reservado acima da dock: empurra as janelas maximizadas para cima sem mover a dock'),
             lower: 0, upper: 40, step: 1, digits: 0,
         }));
         layoutGroup.add(this._spinRow(gsettings, 'dock-recent-apps', {

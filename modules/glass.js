@@ -43,6 +43,32 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
         style_class: `${variant}-blur`,
         x_expand: true, y_expand: true,
     });
+    // A note on the bar's four corners, because this was investigated
+    // properly and the answer is a real limitation rather than a bug we
+    // still owe a fix for.
+    //
+    // St's `border-radius` only rounds what St itself paints (background,
+    // border, box-shadow). It has no effect on anything a Clutter *effect*
+    // draws, and Shell.BlurEffect in BACKGROUND mode paints the blurred
+    // backdrop over the actor's full rectangular allocation. So each corner
+    // shows a wedge of blurred desktop outside the rounded outline —
+    // measured on a headless capture as (0,101,255) at the corner against
+    // (0,91,239) for the desktop right beside it, i.e. a visible step,
+    // which is the "marca nas 4 pontas" report.
+    //
+    // The standard fix — a rounded-rect mask as a Shell.GLSLEffect ahead of
+    // the blur — was implemented and then removed, because it breaks the
+    // blur outright. Shell.BlurEffect samples the *current* framebuffer,
+    // and a GLSLEffect is a ClutterOffscreenEffect that pushes its own FBO
+    // in front of it, so the blur ends up sampling an empty buffer.
+    // Measured A/B on the same bar over the same desktop, one row near the
+    // bar's foot where the backdrop is dark grey but bright blue sits just
+    // above it: unmasked (45,55,83) — blue bleeding downward, i.e. a live
+    // blur — versus masked (47,47,50), no bleed at all, just tint over the
+    // local colour. The blur is dead with the mask on.
+    //
+    // Trading a working blur for square-free corners is not a trade this
+    // codebase gets to make silently, so the corners stay as they are.
     const blurEffect = new Shell.BlurEffect({
         mode: Shell.BlurMode.BACKGROUND,
         radius: 0,

@@ -19,7 +19,9 @@ import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import { launchUri, iconForEntry, sortEntries } from './utils.js';
+import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
+
+import { launchUri, iconForEntry, sortEntries, moveToTrash } from './utils.js';
 
 // In icon-name order of preference. Themes disagree about this one:
 // Adwaita ships `user-trash` as full-colour artwork under places/ but
@@ -61,6 +63,12 @@ class DockTrashIcon extends St.Button {
 
         this._iconSize = iconSize;
         this._full = false;
+
+        // ui/dnd.js resolves a drop by walking up from the picked actor
+        // looking for an ancestor whose `_delegate` has acceptDrop — so an
+        // actor that wants to be a drop target has to point `_delegate` at
+        // itself, exactly as DockFolderIcon already does for its own drag.
+        this._delegate = this;
 
         // Fixed layout so the peek keeps the offset _updatePeek() gives it
         // instead of being packed into a row beside the bin.
@@ -203,5 +211,35 @@ class DockTrashIcon extends St.Button {
         this._icon.icon_size = size;
         this._stack.set_size(size, size);
         this._updatePeek();
+    }
+
+    // -- drop target -------------------------------------------------------
+    //
+    // Dragging a file out of an open stack and onto the Trash discards it,
+    // as it does on macOS. Only files coming from one of our own stack
+    // panels are accepted — a dock icon being dragged for reordering must
+    // fall through to DockManager's own handling, which is what returning
+    // CONTINUE/false does (ui/dnd.js keeps walking up the parent chain on
+    // both).
+
+    handleDragOver(source) {
+        if (!source?.stackEntryUri)
+            return DND.DragMotionResult.CONTINUE;
+        this.add_style_class_name('macos-dock-drop-target');
+        return DND.DragMotionResult.MOVE_DROP;
+    }
+
+    acceptDrop(source) {
+        this.clearDropFeedback();
+        if (!source?.stackEntryUri)
+            return false;
+        // The folder monitor on trash:/// already drives _updateState(), so
+        // the bin fills itself once the move lands — no explicit refresh.
+        moveToTrash(source.stackEntryUri);
+        return true;
+    }
+
+    clearDropFeedback() {
+        this.remove_style_class_name('macos-dock-drop-target');
     }
 });

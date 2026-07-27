@@ -218,3 +218,46 @@ export function launchUri(uri) {
         logError(error, 'macOS Dock Stack: failed to open item');
     }
 }
+
+/**
+ * Opens `uri` with a specific Shell.App — what dropping a file onto an
+ * app's Dock icon does on macOS. Shell.App.launch() takes no file
+ * arguments, so this goes through the app's GAppInfo, which does.
+ */
+export function openWithApp(app, uri) {
+    const appInfo = app?.get_app_info?.();
+    if (!appInfo) {
+        // A window-backed app (one with no .desktop file) has no GAppInfo
+        // to launch with — fall back to the system default rather than
+        // silently dropping the file on the floor.
+        launchUri(uri);
+        return;
+    }
+    try {
+        appInfo.launch_uris([uri], null);
+    } catch (error) {
+        logError(error, 'macOS Dock Stack: failed to open item with app');
+    }
+}
+
+/**
+ * Moves a file to the trash, the way dragging it onto the macOS Dock's
+ * Trash does. `trash_async` and not `delete`: this must be reversible, and
+ * it must land in the same trash the Trash icon already watches.
+ */
+export function moveToTrash(uri, callback) {
+    const file = Gio.File.new_for_uri(uri);
+    file.trash_async(GLib.PRIORITY_DEFAULT, null, (source, result) => {
+        try {
+            source.trash_finish(result);
+            callback?.(true);
+        } catch (error) {
+            // Most commonly a file on a filesystem with no trash directory
+            // (a FAT stick, some network mounts) — GIO reports
+            // G_IO_ERROR_NOT_SUPPORTED. Deleting it outright instead would
+            // be an unrecoverable surprise, so this just reports failure.
+            logError(error, 'macOS Dock Stack: failed to move item to trash');
+            callback?.(false);
+        }
+    });
+}

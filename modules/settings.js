@@ -27,6 +27,7 @@ export class StackSettings {
 
     get dockIconSize() { return this._gsettings.get_int('dock-icon-size'); }
     get dockEdgeMargin() { return this._gsettings.get_int('dock-edge-margin'); }
+    get dockWindowGap() { return this._gsettings.get_int('dock-window-gap'); }
     get dockAutohide() { return this._gsettings.get_boolean('dock-autohide'); }
     get dockMagnificationEnabled() { return this._gsettings.get_boolean('dock-magnification-enabled'); }
     get dockMagnificationAmount() { return this._gsettings.get_double('dock-magnification-amount'); }
