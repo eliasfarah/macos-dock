@@ -315,6 +315,62 @@
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     }
 
+    .showcase-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 24px;
+      padding: 16px 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      backdrop-filter: var(--glass-blur);
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      transition: all 0.3s ease;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+    
+    .showcase-note:hover {
+      border-color: var(--border-glow);
+      background: var(--bg-card-hover);
+      color: var(--text-main);
+      transform: translateY(-2px);
+      box-shadow: 0 15px 40px rgba(99, 102, 241, 0.15);
+    }
+    
+    .showcase-note strong {
+      color: var(--text-main);
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    
+    .showcase-note a {
+      color: var(--primary-accent);
+      text-decoration: none;
+      font-weight: 500;
+      position: relative;
+    }
+
+    .showcase-note a::after {
+      content: '';
+      position: absolute;
+      width: 100%;
+      height: 1px;
+      bottom: -2px;
+      left: 0;
+      background: var(--primary-gradient);
+      transform: scaleX(0);
+      transform-origin: right;
+      transition: transform 0.3s ease;
+    }
+
+    .showcase-note a:hover::after {
+      transform: scaleX(1);
+      transform-origin: left;
+    }
+
     /* Features Section */
     .features-section {
       padding: 90px 0;
@@ -639,6 +695,20 @@
           <div></div>
         </div>
         <img src="assets/dock-screenshot.png" alt="macOS Dock Stack Preview on GNOME 50" class="showcase-img">
+      </div>
+
+      <div class="showcase-note">
+        <svg width="22" height="22" fill="none" stroke="url(#paint0_linear)" stroke-width="2" viewBox="0 0 24 24">
+          <defs>
+            <linearGradient id="paint0_linear" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#a855f7" />
+              <stop offset="0.5" stop-color="#6366f1" />
+              <stop offset="1" stop-color="#3b82f6" />
+            </linearGradient>
+          </defs>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+        </svg>
+        <span><strong>Pro Tip:</strong> To achieve this exact aesthetic, use the premium <a href="https://eliasfarah.github.io/macos-icons/" target="_blank">macOS Icons Pack</a>.</span>
       </div>
     </div>
   </section>
