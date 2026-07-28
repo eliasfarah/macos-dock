@@ -89,6 +89,13 @@ const MAGNIFY_IDLE_FRAMES = 30;
 // How many app ids the recents queue remembers on disk, independently of
 // how many the preference currently displays — see _recordRecentApps().
 const RECENT_APPS_MEMORY = 12;
+// Ceiling for the suppressed-slot counter, matching the `dock-recent-apps`
+// schema range: suppressing more slots than the section can ever show would
+// only mean "the section stays empty forever".
+const RECENT_APPS_MAX_SUPPRESSED = 6;
+// Shortest gap between two geometry repairs, in microseconds — see
+// _verifyDockGeometry().
+const GEOMETRY_FIX_COOLDOWN = 250000;
 // The floor the auto-shrink will not go below (see _effectiveIconSize).
 // Past this the icons stop being recognisable and a dock that has become
 // illegible is worse than one that is merely full.
@@ -118,8 +125,14 @@ export class DockManager {
         this._stackIcons = new Map(); // stack id -> DockFolderIcon
         this._redisplayIdle = 0;
         // How many closed-recent slots "Remover da Dock" has suppressed —
-        // see _forgetRecentApp() and _recentApps().
+        // see _forgetRecentApp() and _recentWindowIds(). Persisted, so a
+        // gap the user made survives a reboot; the real value is loaded in
+        // _loadRecentAppsState().
         this._forgottenRecentSlots = 0;
+        // App ids that were already running at the previous redisplay. The
+        // difference against the current set is what counts as a launch —
+        // see _recordRecentApps().
+        this._runningAppIds = new Set();
         this._overviewHiddenId = 0;
 
         this._appSystem = Shell.AppSystem.get_default();
@@ -145,6 +158,11 @@ export class DockManager {
         this._autohideTimeoutId = 0;
         this._dockHidden = false;
 
+        // Pending re-layout queued by _verifyDockGeometry(); also its
+        // "a repair is already on the way" flag.
+        this._geometryFixId = 0;
+        this._lastGeometryFix = 0;
+
         // Whether the strut may reserve space yet — false while the login
         // overview-exit is still in flight, see _settleStrut().
         this._strutSettled = false;
@@ -168,6 +186,11 @@ export class DockManager {
     }
 
     enable() {
+        // First, and before anything can write to the recents queue: the
+        // first redisplay has to know which apps were already running when
+        // the session came up (see _loadRecentAppsState).
+        this._loadRecentAppsState();
+
         // Note: no disable_unredirect() here, deliberately. The glass blur
         // samples a clone of the static background group only (see
         // glass.js), which does not go stale when a fullscreen window
@@ -369,6 +392,9 @@ export class DockManager {
         this._installDropTargets();
 
         this._layoutDock();
+        // After the first layout, so the very first allocation the watcher
+        // sees is already the correct one.
+        this._watchDockGeometry();
         this._updateAutohide();
 
         // Persistent, not one-shot, and deliberately nothing but the strut
@@ -739,6 +765,11 @@ export class DockManager {
             this._monitorsChangedId = 0;
         }
 
+        if (this._geometryFixId) {
+            GLib.Source.remove(this._geometryFixId);
+            this._geometryFixId = 0;
+        }
+
         this._cancelScheduledHide();
         this._destroyAutohideStrip();
 
@@ -1000,7 +1031,7 @@ export class DockManager {
         // monitor rect itself never depends on our strut, so anchoring
         // to it directly breaks the loop entirely.
         const bottom = monitor ? monitor.y + monitor.height : workArea.y + workArea.height;
-        const y = bottom - height - margin;
+        const y = this._dockTargetY(bottom, height, margin);
 
         // Remembered as the "unmagnified" geometry so hover
         // magnification can widen the bar around it and return to it
@@ -1035,6 +1066,119 @@ export class DockManager {
         }
 
         this._layoutAutohideStrip();
+    }
+
+    /**
+     * The bar's resting top edge. One line, but deliberately its own
+     * method: _verifyDockGeometry() has to be able to ask "where should the
+     * bar be right now?" without re-running a whole layout pass, and the
+     * two answers must not be able to drift apart.
+     */
+    _dockTargetY(bottom, height, margin) {
+        return bottom - height - margin;
+    }
+
+    /**
+     * Watches for the bar being moved by anything that is not this class.
+     *
+     * Reported as "a dock em algum momento para de flutuar / ela se move
+     * sozinha", with the giveaway that the running-app dots sometimes
+     * vanish: those dots sit flush against the glass's bottom edge
+     * (measured off his screenshots — 5px tall, ending exactly on the rim),
+     * so losing them means the bar's bottom has gone past the screen edge,
+     * i.e. it is sitting lower than _layoutDock() ever asks for.
+     *
+     * _layoutDock() itself was cleared of suspicion first, in the isolated
+     * headless session: instrumented across icon sizes and through a forced
+     * auto-shrink, the actor's real allocation matched the requested
+     * geometry exactly every time (min == natural == metrics.height, always
+     * exactly `margin` px of screen left below it), so the bar is not
+     * overflowing its own request and the arithmetic is not wrong. The
+     * remaining candidates all live outside what a virtual monitor can
+     * reproduce — a fullscreen game taking the display through a mode
+     * switch, lock/unlock, a monitor hotplug settling — which is precisely
+     * the class of thing this machine's NVIDIA/Wayland session produces and
+     * the harness never does.
+     *
+     * So rather than guess at which one it is, the geometry is treated as
+     * an invariant: whenever the actor's own allocation stops agreeing with
+     * the freshly computed target it is put back, and the disagreement is
+     * logged with every number needed to identify the culprit. That fixes
+     * the symptom now and leaves a journal line naming the cause the next
+     * time it happens.
+     *
+     * Deliberately only the *vertical* geometry is policed. Hover
+     * magnification legitimately owns x and width (_stepDockWidth rewrites
+     * both every frame), so checking those would fight it; nothing but
+     * autohide has any business moving the bar up or down.
+     */
+    _watchDockGeometry() {
+        // 'notify::allocation' covers anything that repositions or resizes
+        // the actor; translation_y is a transform, which does not touch the
+        // allocation at all, so it needs its own notification.
+        this._dockActor.connect('notify::allocation', () => this._verifyDockGeometry());
+        this._dockActor.connect('notify::translation-y', () => this._verifyDockGeometry());
+    }
+
+    _verifyDockGeometry() {
+        if (!this._dockActor || this._chromeGone || this._tearingDown ||
+            this._layingOut || this._geometryFixId || this._dockHidden)
+            return;
+
+        const monitor = Main.layoutManager.monitors[Main.layoutManager.primaryIndex];
+        if (!monitor)
+            return;
+
+        const margin = this._settings.dockEdgeMargin;
+        const height = Math.round(this._dockMetrics().height);
+        const wantY = Math.round(this._dockTargetY(monitor.y + monitor.height, height, margin));
+
+        // While autohide is on, translation_y belongs to the reveal/hide
+        // spring and is non-zero for the whole of a 260ms animation, so
+        // folding it in here would make this fight that animation. With
+        // autohide off nothing else may touch it, so a non-zero value is
+        // itself a fault worth repairing — a spring cancelled mid-flight
+        // would strand the bar low in exactly this way.
+        const translation = this._settings.dockAutohide ? 0 : this._dockActor.translation_y;
+        const box = this._dockActor.get_allocation_box();
+        const haveY = Math.round(box.y1 + translation);
+        const haveHeight = Math.round(box.y2 - box.y1);
+
+        if (haveY === wantY && haveHeight === height)
+            return;
+
+        // A repair does not land in the allocation the notification that
+        // follows it reports — measured: the repaired actor still hands
+        // back the stale box on the next check, which read as a second,
+        // identical fault and logged the same warning twice. The cooldown
+        // swallows that echo, and doubles as the ceiling on how often this
+        // can act at all: if something out there genuinely fights us for
+        // the bar's position, this settles into four repairs a second
+        // instead of spinning the loop.
+        const now = GLib.get_monotonic_time();
+        if (now - this._lastGeometryFix < GEOMETRY_FIX_COOLDOWN)
+            return;
+
+        const detail = `y=${haveY} (esperado ${wantY}), altura=${haveHeight} (esperada ${height}), ` +
+            `translation_y=${this._dockActor.translation_y}, margem=${margin}, ` +
+            `monitor=${monitor.x},${monitor.y} ${monitor.width}x${monitor.height}, ` +
+            `overview=${Main.overview.visible}, autohide=${this._settings.dockAutohide}`;
+
+        // Deferred rather than repaired in place: this runs from inside an
+        // allocation notification, and re-entering the layout from there is
+        // the relayout-during-allocate that Clutter complains about. The id
+        // also coalesces a burst of notifications into a single repair.
+        this._geometryFixId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._geometryFixId = 0;
+            if (!this._dockActor || this._chromeGone || this._tearingDown)
+                return GLib.SOURCE_REMOVE;
+            this._lastGeometryFix = GLib.get_monotonic_time();
+            console.warn(`macos-dock-stack: a dock saiu do lugar e foi recolocada — ${detail}`);
+            if (!this._settings.dockAutohide)
+                this._dockActor.translation_y = 0;
+            this._layoutDock();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     /**
@@ -1293,6 +1437,66 @@ export class DockManager {
     }
 
     /**
+     * Whether an app id is worth writing to disk.
+     *
+     * A window the shell cannot match to a desktop entry still gets a
+     * ShellApp, but with a synthetic id of the form `window:<n>` built from
+     * the window's stable sequence number — a per-session counter. Storing
+     * one is worse than useless: after the next boot that id resolves to
+     * nothing, the same program comes back under a *different* synthetic
+     * id, and _recordRecentApps() files it as a brand-new recent that
+     * pushes the genuine entries one place further down the queue until
+     * they fall off the end of it. That is the mechanism behind "quando
+     * reinicio os apps recentes mudam" — his stored queue held four of
+     * them (window:60, window:30, window:35, window:26) interleaved with
+     * the real entries.
+     */
+    _isPersistentAppId(id) {
+        return typeof id === 'string' && id.endsWith('.desktop');
+    }
+
+    /** The stored queue with everything unusable filtered out. */
+    _sanitisedRecentIds() {
+        return this._settings.getRecentApps().filter(id => this._isPersistentAppId(id));
+    }
+
+    /**
+     * Session-start state for the recents queue.
+     *
+     * Apps that are already running when the extension is enabled are
+     * seeded into `_runningAppIds` so the first redisplay does not read
+     * them as launches. Without that, every app restored at login would be
+     * promoted to the front of the queue in whatever order
+     * Shell.AppSystem.get_running() happened to return them — reordering
+     * the very section this is trying to keep stable.
+     *
+     * The stored queue is also repaired here rather than left to age out,
+     * so ids that cannot survive a reboot stop occupying slots in the
+     * twelve-deep memory immediately.
+     */
+    _loadRecentAppsState() {
+        this._forgottenRecentSlots = clamp(
+            this._settings.recentAppsSuppressed, 0, RECENT_APPS_MAX_SUPPRESSED);
+
+        this._runningAppIds = new Set(this._appSystem.get_running()
+            .filter(app => app.get_app_info())
+            .map(app => app.get_id()));
+
+        const stored = this._settings.getRecentApps();
+        const cleaned = stored.filter(id => this._isPersistentAppId(id));
+        if (cleaned.length !== stored.length)
+            this._settings.setRecentApps(cleaned);
+    }
+
+    _setForgottenRecentSlots(count) {
+        const next = clamp(Math.round(count), 0, RECENT_APPS_MAX_SUPPRESSED);
+        if (next === this._forgottenRecentSlots)
+            return;
+        this._forgottenRecentSlots = next;
+        this._settings.recentAppsSuppressed = next;
+    }
+
+    /**
      * The "recently opened" section macOS keeps to the right of the
      * pinned apps: an app you launched but never pinned stays on the Dock
      * after you quit it, and the three most recent ones are kept.
@@ -1302,78 +1506,93 @@ export class DockManager {
      * apps are never recorded: they have their own section, and letting
      * them into this one would duplicate them.
      *
-     * Only apps that are genuinely new to the queue get inserted (at the
-     * front) — an app already somewhere in the queue keeps its existing
-     * position instead of jumping to the front just for being open right
-     * now. Re-ordering on every focus made the queue (and therefore the
-     * dock's recents section, once the app closed again) reshuffle from
-     * unrelated activity like switching back to an app you never left.
+     * Only a genuine launch — an app that was not running at the previous
+     * redisplay — can touch the queue, and even then only if the app is
+     * not already inside the visible window (see _recentWindowIds). So
+     * re-focusing, quitting, or relaunching something the dock is already
+     * showing leaves the order completely alone, which is what commit
+     * a02728c was after; but launching an app the dock is *not* showing
+     * pulls it to the front, so the icon it gains is one the queue can
+     * reproduce after a reboot instead of one that exists only for as long
+     * as the process does.
      */
     _recordRecentApps() {
-        if (this._settings.dockRecentApps === 0)
+        // Tracked before the early return below, so raising the preference
+        // from 0 later does not make every already-open app look freshly
+        // launched.
+        const runningApps = this._appSystem.get_running().filter(app => app.get_app_info());
+        const runningIds = runningApps.map(app => app.get_id());
+        const launched = runningIds.filter(id => !this._runningAppIds.has(id));
+        this._runningAppIds = new Set(runningIds);
+
+        if (this._settings.dockRecentApps === 0 || launched.length === 0)
             return;
 
         const favouriteIds = new Set(this._favorites.getFavorites().map(app => app.get_id()));
-        const running = this._appSystem.get_running()
-            .map(app => app.get_id())
-            .filter(id => !favouriteIds.has(id));
-        if (running.length === 0)
-            return;
+        const stored = this._sanitisedRecentIds();
+        const shown = new Set(this._recentWindowIds(stored, favouriteIds));
 
-        const stored = this._settings.getRecentApps();
-        const storedSet = new Set(stored);
-        const newIds = running.filter(id => !storedSet.has(id));
-        if (newIds.length === 0)
+        const promote = launched.filter(id => !favouriteIds.has(id) && !shown.has(id));
+        if (promote.length === 0)
             return;
 
         // Opening an app is the only thing allowed to reclaim a slot that
         // "Remover da Dock" suppressed — see _forgetRecentApp().
-        this._forgottenRecentSlots = Math.max(0, this._forgottenRecentSlots - newIds.length);
+        this._setForgottenRecentSlots(this._forgottenRecentSlots - promote.length);
 
         // Trimmed generously rather than to the exact preference: lowering
         // the preference should not permanently forget apps that raising it
         // again would have shown.
-        const merged = [...newIds, ...stored].slice(0, RECENT_APPS_MEMORY);
+        const promoted = new Set(promote);
+        const merged = [...promote, ...stored.filter(id => !promoted.has(id))]
+            .slice(0, RECENT_APPS_MEMORY);
         this._settings.setRecentApps(merged);
     }
 
     /**
-     * Recently-used, currently-closed apps still worth a dock icon.
+     * The ids the recents section shows, in the order it shows them —
+     * derived from the persisted queue alone, deliberately NOT from what
+     * happens to be running.
      *
-     * The preference is a budget for the whole unpinned section, not just
-     * for its closed half. macOS' recents area is a fixed number of slots
-     * that a running unpinned app occupies while it is open and gives back
-     * when it quits — so with the preference at 3 and three unpinned apps
-     * running, no closed app is shown at all. Counting only closed apps
-     * against the limit is what put more than three icons past the divider
-     * ("estao ficando mais de tres apps mesmo definido 3"). Running apps
-     * are never dropped to make room: an open app has to stay reachable
-     * from the dock whatever the setting says.
+     * The limit used to have the number of running unpinned apps
+     * subtracted from it, which made the slice of the queue that reached
+     * the dock a function of the current session: with two unpinned apps
+     * open the section rendered queue[0] plus those two, and after a
+     * reboot the identical queue rendered queue[0..2] instead. Same stored
+     * data, different dock — "os apps recentes mudam desde o último boot".
+     * Deriving the window from the queue alone makes the section
+     * reproducible: it comes back showing exactly what it showed before,
+     * in the same order.
      *
-     * `_forgottenRecentSlots` further shrinks the budget: removing a
-     * recent icon should not immediately pull an older one out of history
-     * to fill the gap, only opening another unpinned app should (see
+     * (The budget that motivated the old subtraction — "estao ficando mais
+     * de tres apps mesmo definido 3" — is preserved: running unpinned apps
+     * now land *inside* this window, because launching one promotes it
+     * there. Only an app open beyond the budget still hangs off the end,
+     * and dropping its icon while it is open was never an option.)
+     *
+     * `_forgottenRecentSlots` shrinks the budget: removing a recent icon
+     * should not immediately pull an older one out of history to fill the
+     * gap, only opening another unpinned app should (see
      * _recordRecentApps() and _forgetRecentApp()).
      */
-    _recentApps(favouriteIds, runningIds) {
-        const limit = this._settings.dockRecentApps - runningIds.size - this._forgottenRecentSlots;
+    _recentWindowIds(storedIds, favouriteIds) {
+        const limit = this._settings.dockRecentApps - this._forgottenRecentSlots;
         if (limit <= 0)
             return [];
 
-        const apps = [];
-        for (const id of this._settings.getRecentApps()) {
-            if (apps.length >= limit)
+        const ids = [];
+        for (const id of storedIds) {
+            if (ids.length >= limit)
                 break;
-            if (favouriteIds.has(id) || runningIds.has(id))
+            if (favouriteIds.has(id))
                 continue;
             // An app can be uninstalled between one login and the next, in
             // which case lookup_app returns null and the id is simply
             // skipped — it drops out of the queue on the next write.
-            const app = this._appSystem.lookup_app(id);
-            if (app)
-                apps.push(app);
+            if (this._appSystem.lookup_app(id))
+                ids.push(id);
         }
-        return apps;
+        return ids;
     }
 
     _redisplayApps() {
@@ -1387,32 +1606,40 @@ export class DockManager {
         const favoriteIds = new Set(favoriteApps.map(app => app.get_id()));
         const runningApps = this._appSystem.get_running()
             .filter(app => !favoriteIds.has(app.get_id()));
-        const runningIds = new Set(runningApps.map(app => app.get_id()));
-        // Closed, but recent enough that macOS would still show them.
-        const recentApps = this._recentApps(favoriteIds, runningIds);
+        const runningById = new Map(runningApps.map(app => [app.get_id(), app]));
+
+        const storedIds = this._sanitisedRecentIds();
+        // What the persisted queue says this section is, independently of
+        // the current session — the whole point of _recentWindowIds().
+        const windowIds = this._recentWindowIds(storedIds, favoriteIds);
 
         // Ordered by the persisted recents queue (stable — see
         // _recordRecentApps()) rather than "every running app, then every
         // closed one": that split made an app's icon jump position the
         // instant it launched or quit, even though its place in the queue
-        // never actually moved. Apps somehow running but not yet in the
-        // queue (e.g. the preference was just raised from 0) are appended
-        // last so they still get an icon.
-        const runningById = new Map(runningApps.map(app => [app.get_id(), app]));
-        const recentById = new Map(recentApps.map(app => [app.get_id(), app]));
+        // never actually moved.
         const trailingApps = [];
         const seenTrailingIds = new Set();
-        for (const id of this._settings.getRecentApps()) {
-            const app = runningById.get(id) ?? recentById.get(id);
-            if (app) {
-                trailingApps.push(app);
-                seenTrailingIds.add(id);
-            }
-        }
-        for (const app of runningApps) {
-            if (!seenTrailingIds.has(app.get_id()))
-                trailingApps.push(app);
-        }
+        const pushTrailing = (id, app) => {
+            if (!app || seenTrailingIds.has(id))
+                return;
+            trailingApps.push(app);
+            seenTrailingIds.add(id);
+        };
+
+        for (const id of windowIds)
+            pushTrailing(id, runningById.get(id) ?? this._appSystem.lookup_app(id));
+
+        // Open unpinned apps that did not make the window: over budget, or
+        // running since before the queue knew about them. They keep their
+        // place in the queue's order and are appended after it, because an
+        // app that is open has to stay reachable from the dock whatever the
+        // preference says. They are the one part of the row a reboot cannot
+        // reproduce — nothing else here depends on what is running.
+        for (const id of storedIds)
+            pushTrailing(id, runningById.get(id));
+        for (const app of runningApps)
+            pushTrailing(app.get_id(), app);
 
         const wantedIds = new Set([...favoriteIds, ...trailingApps.map(app => app.get_id())]);
         for (const [appId, icon] of this._appIcons) {
@@ -1464,7 +1691,7 @@ export class DockManager {
         // already shows), and a running one cannot be removed at all while
         // it is open. Without this there was no way to take a recent app
         // off the dock at all. See DockAppIcon.popupMenu().
-        const recentIds = new Set(recentApps.map(app => app.get_id()));
+        const recentIds = new Set(windowIds.filter(id => !runningById.has(id)));
         for (const [appId, icon] of this._appIcons) {
             icon.removeAction = recentIds.has(appId)
                 ? () => this._forgetRecentApp(appId)
@@ -1485,12 +1712,14 @@ export class DockManager {
      *
      * Also claims one slot in `_forgottenRecentSlots` so the vacated spot
      * stays empty rather than being immediately filled by the next-oldest
-     * app in the stored queue — see _recentApps().
+     * app in the stored queue — see _recentWindowIds(). The count is
+     * persisted, so the gap is still there after a restart instead of
+     * quietly refilling itself.
      */
     _forgetRecentApp(appId) {
-        const remaining = this._settings.getRecentApps().filter(id => id !== appId);
+        const remaining = this._sanitisedRecentIds().filter(id => id !== appId);
         this._settings.setRecentApps(remaining);
-        this._forgottenRecentSlots++;
+        this._setForgottenRecentSlots(this._forgottenRecentSlots + 1);
         this._queueRedisplay();
     }
 
@@ -1743,7 +1972,6 @@ export class DockManager {
         // frame, and after a stall (or a missed frame under load) it can
         // report long enough that `blend` saturates at 1 and the icons snap
         // to their target instead of easing into it.
-        globalThis.__mdockFrames = (globalThis.__mdockFrames ?? 0) + 1; // DIAG temporário
         const dt = Math.min(50, Math.max(1, deltaMs));
         const blend = 1 - Math.exp(-dt / MAGNIFY_TAU);
         const { entries, totalExtra } = this._magnificationTargets(icons);

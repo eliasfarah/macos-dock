@@ -9,9 +9,21 @@
 
 const STACKS_KEY = 'stacks';
 
+// Keys the extension writes itself but that an older *compiled* schema may
+// not know about yet. Gio.Settings treats an unknown key as a programmer
+// error and aborts the process rather than raising anything catchable, so
+// a session running against a stale gschemas.compiled would take the whole
+// shell down instead of merely losing one stored value. Every access to
+// such a key goes through _hasKey() first.
+const SUPPRESSED_KEY = 'recent-apps-suppressed';
+
 export class StackSettings {
     constructor(gioSettings) {
         this._gsettings = gioSettings;
+    }
+
+    _hasKey(key) {
+        return this._gsettings?.settings_schema?.has_key(key) ?? false;
     }
 
     get animationSpeed() { return this._gsettings.get_double('animation-speed'); }
@@ -38,6 +50,18 @@ export class StackSettings {
 
     getRecentApps() { return this._gsettings.get_strv('recent-apps'); }
     setRecentApps(ids) { this._gsettings.set_strv('recent-apps', ids); }
+
+    // Degrades to "no slots suppressed" on an installation whose schema has
+    // not been recompiled yet: the recents section then simply refills the
+    // gap after a restart, which is the old behaviour, rather than failing.
+    get recentAppsSuppressed() {
+        return this._hasKey(SUPPRESSED_KEY) ? this._gsettings.get_int(SUPPRESSED_KEY) : 0;
+    }
+
+    set recentAppsSuppressed(count) {
+        if (this._hasKey(SUPPRESSED_KEY))
+            this._gsettings.set_int(SUPPRESSED_KEY, count);
+    }
 
     getStacks() {
         const raw = this._gsettings.get_string(STACKS_KEY);

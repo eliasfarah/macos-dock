@@ -141,7 +141,14 @@
     <key name="recent-apps" type="as">
       <default>[]</default>
       <summary>Lista de apps recentes</summary>
-      <description>IDs dos aplicativos usados recentemente, do mais recente ao mais antigo. Mantido pela extensão; não é uma preferência editável.</description>
+      <description>IDs dos aplicativos usados recentemente, do mais recente ao mais antigo. Somente IDs de arquivos .desktop são guardados: janelas que o Shell não consegue associar a um .desktop recebem um ID sintético ("window:12") cujo número muda a cada sessão, então guardá-lo faria a lista se embaralhar a cada reinício. Mantido pela extensão; não é uma preferência editável.</description>
+    </key>
+
+    <key name="recent-apps-suppressed" type="i">
+      <range min="0" max="6"/>
+      <default>0</default>
+      <summary>Vagas de recentes suprimidas</summary>
+      <description>Quantas vagas da seção de recentes foram esvaziadas por "Remover da Dock" e devem continuar vazias até que outro aplicativo seja aberto. Persistido para que a seção volte igual depois de reiniciar. Mantido pela extensão; não é uma preferência editável.</description>
     </key>
 
     <key name="appearance" type="s">
