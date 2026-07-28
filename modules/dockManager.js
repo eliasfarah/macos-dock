@@ -25,6 +25,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import { createGlassPanel, applyPanelRadius } from './glass.js';
 import { LauncherEntryWatcher } from './launcherEntry.js';
@@ -315,8 +316,8 @@ export class DockManager {
         this._trashIcon = this._watchIconLifetime(new DockTrashIcon(this._settings.dockIconSize));
         this._trashIcon.set_pivot_point(0.5, 1); // grow upward from the dock's baseline
 
-        this._trackTooltip(this._showAppsIcon, () => 'Aplicativos');
-        this._trackTooltip(this._trashIcon, () => 'Lixeira');
+        this._trackTooltip(this._showAppsIcon, () => _('Applications'));
+        this._trackTooltip(this._trashIcon, () => _('Trash'));
 
         // The launcher belongs *inside* the app section (Launchpad sits
         // among the apps on a real Dock), and the Trash shares the trailing
@@ -711,7 +712,7 @@ export class DockManager {
     _buildContextMenu() {
         this._contextMenuManager = new PopupMenu.PopupMenuManager(this._dockActor);
         this._contextMenu = new PopupMenu.PopupMenu(this._dockActor, 0.5, St.Side.BOTTOM);
-        this._contextMenu.addAction('Preferências da Dock…', () => this._onOpenPreferences?.());
+        this._contextMenu.addAction(_('Dock Preferences…'), () => this._onOpenPreferences?.());
         Main.uiGroup.add_child(this._contextMenu.actor);
         this._contextMenu.actor.hide();
         this._contextMenuManager.addMenu(this._contextMenu);

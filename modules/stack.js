@@ -15,6 +15,7 @@ import Pango from 'gi://Pango';
 import Graphene from 'gi://Graphene';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
+import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import { SPRING, animateSpring, animateStagger, cancelSpring } from './animations.js';
 import { createGlassPanel, createShadowActor } from './glass.js';
@@ -892,7 +893,7 @@ export class Stack {
         });
 
         const label = new St.Label({
-            text: 'Abrir no Gerenciador de Arquivos',
+            text: _('Open in Files'),
             style_class: 'macos-stack-fan-label',
             y_align: Clutter.ActorAlign.CENTER,
         });

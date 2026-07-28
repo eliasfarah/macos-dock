@@ -14,6 +14,7 @@ import St from 'gi://St';
 import Shell from 'gi://Shell';
 import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
+import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import { animateSpring, SPRING } from './animations.js';
 import { openWithApp } from './utils.js';
@@ -86,7 +87,7 @@ class DockAppIcon extends AppDisplay.AppIcon {
     popupMenu() {
         const result = super.popupMenu();
         if (this._menu && !this._removeItem) {
-            this._removeItem = this._menu.addAction('Remover da Dock', () => {
+            this._removeItem = this._menu.addAction(_('Remove from Dock'), () => {
                 this.removeAction?.();
             });
         }

@@ -62,7 +62,7 @@ export default class MacosDockStackExtension extends Extension {
         if (filtered.length !== enabled.length) {
             global.settings.set_strv('enabled-extensions', filtered);
             Main.notify('macOS Dock Stack',
-                'Dash to Dock foi desativado — o macOS Dock Stack assume como dock persistente.');
+                this.gettext('Dash to Dock has been disabled — macOS Dock Stack takes over as the persistent dock.'));
         }
     }
 

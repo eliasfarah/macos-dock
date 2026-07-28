@@ -1,0 +1,285 @@
+# Portuguese translations for macOS Dock Stack package.
+# Copyright (C) 2026 THE macOS Dock Stack'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the macOS Dock Stack package.
+# eliasfarah <eliasfa@gmail.com>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: macOS Dock Stack 1.4.0\n"
+"Report-Msgid-Bugs-To: eliasfa@gmail.com\n"
+"POT-Creation-Date: 2026-07-28 14:43-0300\n"
+"PO-Revision-Date: 2026-07-28 14:43-0300\n"
+"Last-Translator: eliasfarah <eliasfa@gmail.com>\n"
+"Language-Team: Portuguese (Brazil)\n"
+"Language: pt_BR\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: extension.js:65
+msgid ""
+"Dash to Dock has been disabled — macOS Dock Stack takes over as the "
+"persistent dock."
+msgstr "Dash to Dock foi desativado — o macOS Dock Stack assume como dock persistente."
+
+#: prefs.js:25
+msgid "Follow system"
+msgstr "Seguir o sistema"
+
+#: prefs.js:25
+msgid "Light"
+msgstr "Claro"
+
+#: prefs.js:25
+msgid "Dark"
+msgstr "Escuro"
+
+#: prefs.js:29
+msgid "Genie (macOS style)"
+msgstr "Genie (estilo macOS)"
+
+#: prefs.js:29
+msgid "GNOME Shell default"
+msgstr "Padrão do GNOME Shell"
+
+#: prefs.js:36
+msgid "Automatic"
+msgstr "Automático"
+
+#: prefs.js:36
+msgid "Upward"
+msgstr "Para cima"
+
+#: prefs.js:36
+msgid "Downward"
+msgstr "Para baixo"
+
+#: prefs.js:43
+msgid "Grid"
+msgstr "Grade"
+
+#: prefs.js:43
+msgid "Fan"
+msgstr "Leque"
+
+#: prefs.js:43
+msgid "List"
+msgstr "Lista"
+
+#: prefs.js:61
+msgid "Dock"
+msgstr "Dock"
+
+#: prefs.js:65 prefs.js:148
+msgid "Appearance"
+msgstr "Aparência"
+
+#: prefs.js:68
+msgid "Color scheme"
+msgstr "Esquema de cores"
+
+#: prefs.js:71 prefs.js:163
+msgid "Layout"
+msgstr "Layout"
+
+#: prefs.js:74
+msgid "Icon size"
+msgstr "Tamanho dos ícones"
+
+#: prefs.js:75
+msgid ""
+"Maximum size, in pixels: the dock shrinks icons on its own if they don't fit "
+"the screen"
+msgstr "Tamanho máximo, em pixels: a dock reduz os ícones sozinha se não couberem na tela"
+
+#: prefs.js:79
+msgid "Screen edge margin"
+msgstr "Margem da borda da tela"
+
+#: prefs.js:80
+msgid "Distance between the dock and the bottom edge of the monitor"
+msgstr "Distância entre a dock e a borda inferior do monitor"
+
+#: prefs.js:84
+msgid "Gap between the dock and windows"
+msgstr "Margem entre a dock e as janelas"
+
+#: prefs.js:85
+msgid ""
+"Space reserved above the dock: pushes maximized windows up without moving "
+"the dock"
+msgstr "Espaço reservado acima da dock: empurra as janelas maximizadas para cima sem mover a dock"
+
+#: prefs.js:89
+msgid "Recent apps"
+msgstr "Apps recentes"
+
+#: prefs.js:90
+msgid "How many unpinned apps stay on the dock after closing (0 disables)"
+msgstr "Quantos apps não fixados continuam na dock depois de fechados (0 desativa)"
+
+#: prefs.js:94
+msgid "Auto-hide"
+msgstr "Ocultar automaticamente"
+
+#: prefs.js:95
+msgid ""
+"The dock reserves no screen space and reveals itself when the cursor nears "
+"the edge"
+msgstr "A dock não reserva espaço de tela e se revela ao aproximar o cursor da borda"
+
+#: prefs.js:98
+msgid "Magnification"
+msgstr "Magnificação"
+
+#: prefs.js:101
+msgid "Enlarge icons on hover"
+msgstr "Ampliar ícones ao passar o cursor"
+
+#: prefs.js:104
+msgid "Intensity"
+msgstr "Intensidade"
+
+#: prefs.js:105
+msgid "Maximum scale factor applied to the icon nearest the cursor"
+msgstr "Fator de escala máximo aplicado ao ícone mais próximo do cursor"
+
+#: prefs.js:109
+msgid "Range"
+msgstr "Alcance"
+
+#: prefs.js:110
+msgid "Radius, in pixels, of the cursor's influence over neighboring icons"
+msgstr "Raio, em pixels, de influência do cursor sobre os ícones vizinhos"
+
+#: prefs.js:114
+msgid "Minimize"
+msgstr "Minimizar"
+
+#: prefs.js:117
+msgid "Window minimize effect"
+msgstr "Efeito ao minimizar janelas"
+
+#: prefs.js:127
+msgid "General"
+msgstr "Geral"
+
+#: prefs.js:131
+msgid "Animation"
+msgstr "Animação"
+
+#: prefs.js:134
+msgid "Animation speed"
+msgstr "Velocidade da animação"
+
+#: prefs.js:135
+msgid "Multiplier applied to the spring animation"
+msgstr "Multiplicador aplicado à animação de mola"
+
+#: prefs.js:139
+msgid "Spring overshoot"
+msgstr "Overshoot da mola"
+
+#: prefs.js:140
+msgid ""
+"Slightly overshoots the final value before settling (~3%), like on macOS"
+msgstr "Ultrapassa levemente o valor final antes de assentar (~3%), como no macOS"
+
+#: prefs.js:143
+msgid "Delay between items"
+msgstr "Atraso entre itens"
+
+#: prefs.js:144
+msgid "Milliseconds between each item starting to reveal"
+msgstr "Milissegundos entre o início da revelação de cada item"
+
+#: prefs.js:151
+msgid "Blur intensity"
+msgstr "Intensidade do blur"
+
+#: prefs.js:154
+msgid "Panel opacity"
+msgstr "Opacidade do painel"
+
+#: prefs.js:157
+msgid "Shadow"
+msgstr "Sombra"
+
+#: prefs.js:157
+msgid "Shows a dynamic shadow under the panel"
+msgstr "Exibe uma sombra dinâmica sob o painel"
+
+#: prefs.js:160
+msgid "Panel size"
+msgstr "Tamanho do painel"
+
+#: prefs.js:166
+msgid "Display mode"
+msgstr "Modo de exibição"
+
+#: prefs.js:169
+msgid "Grid columns"
+msgstr "Colunas da grade"
+
+#: prefs.js:172
+msgid "Opening direction"
+msgstr "Direção de abertura"
+
+#: prefs.js:217
+msgid "Stacks"
+msgstr "Stacks"
+
+#: prefs.js:222
+msgid "Configured folders"
+msgstr "Pastas configuradas"
+
+#: prefs.js:223
+msgid ""
+"Each folder below appears as a dock icon; clicking it expands the stack from "
+"the icon itself."
+msgstr "Cada pasta abaixo aparece como um ícone na dock; clicar nele expande o stack a partir do próprio ícone."
+
+#: prefs.js:231
+msgid "Add folder"
+msgstr "Adicionar pasta"
+
+#: prefs.js:257
+msgid "No stacks configured"
+msgstr "Nenhum stack configurado"
+
+#: prefs.js:258
+msgid "Use the “+” button above to add a folder"
+msgstr "Use o botão “+” acima para adicionar uma pasta"
+
+#: prefs.js:266
+msgid "Name"
+msgstr "Nome"
+
+#: prefs.js:302
+msgid "Remove"
+msgstr "Remover"
+
+#: prefs.js:312
+msgid "Select folder for the stack"
+msgstr "Selecionar pasta para o stack"
+
+#: modules/dockAppIcon.js:90
+msgid "Remove from Dock"
+msgstr "Remover da Dock"
+
+#: modules/dockManager.js:319
+msgid "Applications"
+msgstr "Aplicativos"
+
+#: modules/dockManager.js:320
+msgid "Trash"
+msgstr "Lixeira"
+
+#: modules/dockManager.js:715
+msgid "Dock Preferences…"
+msgstr "Preferências da Dock…"
+
+#: modules/stack.js:896
+msgid "Open in Files"
+msgstr "Abrir no Gerenciador de Arquivos"

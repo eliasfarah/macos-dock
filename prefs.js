@@ -22,25 +22,25 @@ const MINIMIZE_EFFECT_VALUES = ['genie', 'default'];
 const APPEARANCE_VALUES = ['system', 'light', 'dark'];
 
 function appearanceLabels() {
-    return [_('Seguir o sistema'), _('Claro'), _('Escuro')];
+    return [_('Follow system'), _('Light'), _('Dark')];
 }
 
 function minimizeEffectLabels() {
-    return [_('Genie (estilo macOS)'), _('Padrão do GNOME Shell')];
+    return [_('Genie (macOS style)'), _('GNOME Shell default')];
 }
 
 // gettext can only be called once the extension is actually running (it
 // resolves the caller against the loaded-extensions registry), so these
 // labels must be built lazily inside a method, not at module-evaluation time.
 function directionLabels() {
-    return [_('Automático'), _('Para cima'), _('Para baixo')];
+    return [_('Automatic'), _('Upward'), _('Downward')];
 }
 
 function modeLabels() {
-    // "Lista", not "Pilha": this mode draws macOS' List view — one compact
-    // row per file — and calling it a pile described the old cascading-tiles
-    // look that was replaced.
-    return [_('Grade'), _('Leque'), _('Lista')];
+    // "List", not "Stack": this mode draws macOS' List view — one compact
+    // row per file — and the old label described the cascading-tiles look
+    // that was replaced.
+    return [_('Grid'), _('Fan'), _('List')];
 }
 
 export default class MacosDockStackPreferences extends ExtensionPreferences {
@@ -62,59 +62,59 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
             icon_name: 'view-app-grid-symbolic',
         });
 
-        const appearanceGroup = new Adw.PreferencesGroup({ title: _('Aparência') });
+        const appearanceGroup = new Adw.PreferencesGroup({ title: _('Appearance') });
         page.add(appearanceGroup);
         appearanceGroup.add(this._comboRow(gsettings, 'appearance', APPEARANCE_VALUES, appearanceLabels(), {
-            title: _('Esquema de cores'),
+            title: _('Color scheme'),
         }));
 
         const layoutGroup = new Adw.PreferencesGroup({ title: _('Layout') });
         page.add(layoutGroup);
         layoutGroup.add(this._spinRow(gsettings, 'dock-icon-size', {
-            title: _('Tamanho dos ícones'),
-            subtitle: _('Tamanho máximo, em pixels: a dock reduz os ícones sozinha se não couberem na tela'),
+            title: _('Icon size'),
+            subtitle: _('Maximum size, in pixels: the dock shrinks icons on its own if they don\'t fit the screen'),
             lower: 36, upper: 96, step: 2, digits: 0,
         }));
         layoutGroup.add(this._spinRow(gsettings, 'dock-edge-margin', {
-            title: _('Margem da borda da tela'),
-            subtitle: _('Distância entre a dock e a borda inferior do monitor'),
+            title: _('Screen edge margin'),
+            subtitle: _('Distance between the dock and the bottom edge of the monitor'),
             lower: 0, upper: 40, step: 1, digits: 0,
         }));
         layoutGroup.add(this._spinRow(gsettings, 'dock-window-gap', {
-            title: _('Margem entre a dock e as janelas'),
-            subtitle: _('Espaço reservado acima da dock: empurra as janelas maximizadas para cima sem mover a dock'),
+            title: _('Gap between the dock and windows'),
+            subtitle: _('Space reserved above the dock: pushes maximized windows up without moving the dock'),
             lower: 0, upper: 40, step: 1, digits: 0,
         }));
         layoutGroup.add(this._spinRow(gsettings, 'dock-recent-apps', {
-            title: _('Apps recentes'),
-            subtitle: _('Quantos apps não fixados continuam na dock depois de fechados (0 desativa)'),
+            title: _('Recent apps'),
+            subtitle: _('How many unpinned apps stay on the dock after closing (0 disables)'),
             lower: 0, upper: 6, step: 1, digits: 0,
         }));
         layoutGroup.add(this._switchRow(gsettings, 'dock-autohide', {
-            title: _('Ocultar automaticamente'),
-            subtitle: _('A dock não reserva espaço de tela e se revela ao aproximar o cursor da borda'),
+            title: _('Auto-hide'),
+            subtitle: _('The dock reserves no screen space and reveals itself when the cursor nears the edge'),
         }));
 
-        const magnifyGroup = new Adw.PreferencesGroup({ title: _('Magnificação') });
+        const magnifyGroup = new Adw.PreferencesGroup({ title: _('Magnification') });
         page.add(magnifyGroup);
         magnifyGroup.add(this._switchRow(gsettings, 'dock-magnification-enabled', {
-            title: _('Ampliar ícones ao passar o cursor'),
+            title: _('Enlarge icons on hover'),
         }));
         magnifyGroup.add(this._spinRow(gsettings, 'dock-magnification-amount', {
-            title: _('Intensidade'),
-            subtitle: _('Fator de escala máximo aplicado ao ícone mais próximo do cursor'),
+            title: _('Intensity'),
+            subtitle: _('Maximum scale factor applied to the icon nearest the cursor'),
             lower: 1.0, upper: 2.5, step: 0.1, digits: 1,
         }));
         magnifyGroup.add(this._spinRow(gsettings, 'dock-magnification-range', {
-            title: _('Alcance'),
-            subtitle: _('Raio, em pixels, de influência do cursor sobre os ícones vizinhos'),
+            title: _('Range'),
+            subtitle: _('Radius, in pixels, of the cursor\'s influence over neighboring icons'),
             lower: 40, upper: 400, step: 10, digits: 0,
         }));
 
-        const minimizeGroup = new Adw.PreferencesGroup({ title: _('Minimizar') });
+        const minimizeGroup = new Adw.PreferencesGroup({ title: _('Minimize') });
         page.add(minimizeGroup);
         minimizeGroup.add(this._comboRow(gsettings, 'dock-minimize-effect', MINIMIZE_EFFECT_VALUES, minimizeEffectLabels(), {
-            title: _('Efeito ao minimizar janelas'),
+            title: _('Window minimize effect'),
         }));
 
         return page;
@@ -124,52 +124,52 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
 
     _buildGeneralPage(gsettings) {
         const page = new Adw.PreferencesPage({
-            title: _('Geral'),
+            title: _('General'),
             icon_name: 'preferences-system-symbolic',
         });
 
-        const animationGroup = new Adw.PreferencesGroup({ title: _('Animação') });
+        const animationGroup = new Adw.PreferencesGroup({ title: _('Animation') });
         page.add(animationGroup);
         animationGroup.add(this._spinRow(gsettings, 'animation-speed', {
-            title: _('Velocidade da animação'),
-            subtitle: _('Multiplicador aplicado à animação de mola'),
+            title: _('Animation speed'),
+            subtitle: _('Multiplier applied to the spring animation'),
             lower: 0.5, upper: 2.5, step: 0.1, digits: 1,
         }));
         animationGroup.add(this._switchRow(gsettings, 'overshoot-enabled', {
-            title: _('Overshoot da mola'),
-            subtitle: _('Ultrapassa levemente o valor final antes de assentar (~3%), como no macOS'),
+            title: _('Spring overshoot'),
+            subtitle: _('Slightly overshoots the final value before settling (~3%), like on macOS'),
         }));
         animationGroup.add(this._spinRow(gsettings, 'stagger-delay', {
-            title: _('Atraso entre itens'),
-            subtitle: _('Milissegundos entre o início da revelação de cada item'),
+            title: _('Delay between items'),
+            subtitle: _('Milliseconds between each item starting to reveal'),
             lower: 10, upper: 60, step: 1, digits: 0,
         }));
 
-        const appearanceGroup = new Adw.PreferencesGroup({ title: _('Aparência') });
+        const appearanceGroup = new Adw.PreferencesGroup({ title: _('Appearance') });
         page.add(appearanceGroup);
         appearanceGroup.add(this._spinRow(gsettings, 'blur-intensity', {
-            title: _('Intensidade do blur'), lower: 0, upper: 100, step: 5, digits: 0,
+            title: _('Blur intensity'), lower: 0, upper: 100, step: 5, digits: 0,
         }));
         appearanceGroup.add(this._spinRow(gsettings, 'panel-opacity', {
-            title: _('Opacidade do painel'), lower: 20, upper: 100, step: 5, digits: 0,
+            title: _('Panel opacity'), lower: 20, upper: 100, step: 5, digits: 0,
         }));
         appearanceGroup.add(this._switchRow(gsettings, 'shadow-enabled', {
-            title: _('Sombra'), subtitle: _('Exibe uma sombra dinâmica sob o painel'),
+            title: _('Shadow'), subtitle: _('Shows a dynamic shadow under the panel'),
         }));
         appearanceGroup.add(this._spinRow(gsettings, 'panel-size', {
-            title: _('Tamanho do painel'), lower: 240, upper: 960, step: 20, digits: 0,
+            title: _('Panel size'), lower: 240, upper: 960, step: 20, digits: 0,
         }));
 
         const layoutGroup = new Adw.PreferencesGroup({ title: _('Layout') });
         page.add(layoutGroup);
         layoutGroup.add(this._comboRow(gsettings, 'display-mode', MODE_VALUES, modeLabels(), {
-            title: _('Modo de exibição'),
+            title: _('Display mode'),
         }));
         layoutGroup.add(this._spinRow(gsettings, 'grid-columns', {
-            title: _('Colunas da grade'), lower: 2, upper: 8, step: 1, digits: 0,
+            title: _('Grid columns'), lower: 2, upper: 8, step: 1, digits: 0,
         }));
         layoutGroup.add(this._comboRow(gsettings, 'open-direction', DIRECTION_VALUES, directionLabels(), {
-            title: _('Direção de abertura'),
+            title: _('Opening direction'),
         }));
 
         return page;
@@ -219,8 +219,8 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
         });
 
         const group = new Adw.PreferencesGroup({
-            title: _('Pastas configuradas'),
-            description: _('Cada pasta abaixo aparece como um ícone na dock; clicar nele expande o stack a partir do próprio ícone.'),
+            title: _('Configured folders'),
+            description: _('Each folder below appears as a dock icon; clicking it expands the stack from the icon itself.'),
         });
         page.add(group);
 
@@ -228,7 +228,7 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
             icon_name: 'list-add-symbolic',
             valign: Gtk.Align.CENTER,
             css_classes: ['flat'],
-            tooltip_text: _('Adicionar pasta'),
+            tooltip_text: _('Add folder'),
         });
         group.set_header_suffix(addButton);
 
@@ -254,8 +254,8 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
         const stacks = settings.getStacks();
         if (stacks.length === 0) {
             const empty = new Adw.ActionRow({
-                title: _('Nenhum stack configurado'),
-                subtitle: _('Use o botão “+” acima para adicionar uma pasta'),
+                title: _('No stacks configured'),
+                subtitle: _('Use the “+” button above to add a folder'),
             });
             group.add(empty);
             this._stackRows.push(empty);
@@ -263,7 +263,7 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
         }
 
         for (const stack of stacks) {
-            const row = new Adw.EntryRow({ title: _('Nome'), text: stack.name });
+            const row = new Adw.EntryRow({ title: _('Name'), text: stack.name });
             row.add_suffix(this._removeButton(settings, stack.id, group));
 
             // Debounced, not written on every keystroke: this same
@@ -299,7 +299,7 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
             icon_name: 'user-trash-symbolic',
             valign: Gtk.Align.CENTER,
             css_classes: ['flat'],
-            tooltip_text: _('Remover'),
+            tooltip_text: _('Remove'),
         });
         button.connect('clicked', () => {
             settings.removeStack(id);
@@ -309,7 +309,7 @@ export default class MacosDockStackPreferences extends ExtensionPreferences {
     }
 
     _pickFolder(window, settings, onDone) {
-        const dialog = new Gtk.FileDialog({ title: _('Selecionar pasta para o stack') });
+        const dialog = new Gtk.FileDialog({ title: _('Select folder for the stack') });
         dialog.select_folder(window, null, (_dlg, result) => {
             try {
                 const file = dialog.select_folder_finish(result);

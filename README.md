@@ -32,10 +32,14 @@ UUID=macos-dock-stack@eliasfarah.github.io
 git clone https://github.com/eliasfarah/macos-dock.git
 ln -s "$PWD/macos-dock" ~/.local/share/gnome-shell/extensions/$UUID
 glib-compile-schemas ~/.local/share/gnome-shell/extensions/$UUID/schemas/
+mkdir -p ~/.local/share/gnome-shell/extensions/$UUID/locale/pt_BR/LC_MESSAGES
+msgfmt ~/.local/share/gnome-shell/extensions/$UUID/po/pt_BR.po \
+  -o ~/.local/share/gnome-shell/extensions/$UUID/locale/pt_BR/LC_MESSAGES/macos-dock-stack.mo
 ```
 
 O `glib-compile-schemas` não é opcional: sem ele a extensão ativa mas não
-encontra nenhuma preferência.
+encontra nenhuma preferência. O `msgfmt` é opcional — sem ele a interface
+aparece em inglês (o idioma original das strings); com ele, em português.
 
 ### Ativar
 

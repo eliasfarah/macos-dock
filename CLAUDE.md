@@ -12,6 +12,7 @@
 UUID=macos-dock-stack@eliasfarah.github.io
 ln -s "$PWD" ~/.local/share/gnome-shell/extensions/$UUID
 glib-compile-schemas schemas/
+msgfmt po/pt_BR.po -o locale/pt_BR/LC_MESSAGES/macos-dock-stack.mo
 
 # Test in isolated session
 export XDG_CONFIG_HOME=/tmp/dock-test/.config
@@ -125,6 +126,23 @@ All settings in `org.gnome.shell.extensions.macos-dock-stack.*` schema (see `sch
 2. `metadata.json` `shell-version` array must include the installed version (e.g., `"50"`) or `gnome-extensions` treats it as not-installed
 3. GSettings writes in live dock go through `DockIntegration` too — debounce if frequent (e.g., 400ms for prefs window keystroke events)
 
+## Internationalization (i18n)
+
+Source strings (the `_('...')` msgid literals in `prefs.js` and `modules/*.js`) are **English**, the GNOME convention — not Portuguese. `po/pt_BR.po` carries the Portuguese translation of every one of them; `locale/pt_BR/LC_MESSAGES/macos-dock-stack.mo` is the compiled catalog gettext actually reads, generated (like `schemas/gschemas.compiled`) and gitignored, not committed.
+
+- **In the shell process** (`extension.js`, `modules/*.js`): `import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';` — a lazy, stack-trace-resolved lookup, safe to call from any function at runtime, **not** at module-eval time (same constraint as prefs.js below). `extension.js` itself is the `Extension` subclass, so it uses the inherited `this.gettext(...)` instead of importing the function.
+- **In prefs.js** (separate process): `import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';` — same lazy-call rule.
+- Translation loading (`ExtensionBase.initTranslations()`) runs automatically in the constructor using `metadata['gettext-domain']`, and looks for `<extension-dir>/locale/<lang>/LC_MESSAGES/<domain>.mo`. No catalog for a language (including English) → `_()` returns the msgid verbatim, which is why English needs no catalog at all.
+- After changing any translatable string or adding a new `_('...')` call, regenerate the template and re-check the Portuguese file for new/removed entries:
+  ```sh
+  xgettext --from-code=UTF-8 --language=JavaScript --keyword=_ --keyword=gettext \
+    --package-name="macOS Dock Stack" -o po/macos-dock-stack.pot \
+    extension.js prefs.js modules/*.js
+  msgmerge --update po/pt_BR.po po/macos-dock-stack.pot
+  ```
+  `msgmerge` leaves new strings untranslated (`msgstr ""`) — fill those in by hand, then recompile with `msgfmt` (see Commands below).
+- Packaging (`gnome-extensions pack`) must include `locale/` via `--extra-source=locale`, same as `modules/` — it is not picked up automatically.
+
 ## Testing Environment
 
 **Machine:** Arch Linux, GNOME 50, Wayland (primary)
@@ -165,6 +183,9 @@ gnome-extensions prefs macos-dock-stack@eliasfarah.github.io
 
 # Compile schemas (after schema changes)
 glib-compile-schemas schemas/
+
+# Compile translations (after po/pt_BR.po changes)
+msgfmt po/pt_BR.po -o locale/pt_BR/LC_MESSAGES/macos-dock-stack.mo
 
 # Disable extension
 gnome-extensions disable macos-dock-stack@eliasfarah.github.io
