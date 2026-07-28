@@ -22,7 +22,7 @@ class DockShowAppsIcon extends St.Button {
         });
 
         this._icon = new St.Icon({
-            gicon: new Gio.ThemedIcon({ name: 'view-app-grid-symbolic' }),
+            gicon: new Gio.ThemedIcon({ name: 'macos-app-grid' }),
             icon_size: iconSize,
         });
         this.set_child(this._icon);
