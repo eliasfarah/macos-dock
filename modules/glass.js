@@ -49,12 +49,12 @@ export function createGlassPanel({ cornerRadius = 18, clipContent = true, varian
     // What the blur effect samples. Two earlier sources both failed on
     // this machine:
     //  - the screen's own framebuffer (a BlitNode of the live stage, the
-    //    way Shell.BlurEffect's BACKGROUND mode does it) comes back solid
-    //    black on the NVIDIA driver whenever a maximized window is open —
-    //    DIAG 3 in roundedBlurEffect.js;
+    //    way Shell.BlurEffect's BACKGROUND mode does it) can come back
+    //    solid black on some NVIDIA/Wayland drivers whenever a maximized
+    //    window is open (see roundedBlurEffect.js's header comment);
     //  - a Clutter.Clone of global.window_group fixed that but wrecked
-    //    the whole session's rendering (DIAG 4): every window's damage
-    //    propagated into the clone, so any animation anywhere re-rendered
+    //    the whole session's rendering: every window's damage propagated
+    //    into the clone, so any animation anywhere re-rendered
     //    the entire desktop a second time through the blur, a permanently
     //    mapped clone of every window disabled mutter's occlusion culling
     //    stage-wide, and it forced disable_unredirect() on top.

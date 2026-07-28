@@ -292,8 +292,9 @@ class DockFolderIcon extends St.Button {
     // nothing is preallocated, and the final size appears nowhere on disk.
     // Chrome's own History database only gets the row *after* the download
     // completes (state=1, total == received) — during the transfer the
-    // downloads table is empty — so even reading his browsing history,
-    // which would be a nasty thing for a dock to do, would not answer it.
+    // downloads table is empty, so even reading the browser's history
+    // (which would be a nasty thing for a dock to do anyway) would not
+    // answer it.
     //
     // So there are two honest states, and both reflect something real:
     //

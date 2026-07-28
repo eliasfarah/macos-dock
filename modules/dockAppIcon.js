@@ -26,12 +26,11 @@ import { openWithApp } from './utils.js';
 const BOUNCE_RATIO = 0.3;
 const ATTENTION_BOUNCE_COUNT = 3;
 // macOS bounces a launching app a few times and then stops, even if the
-// app is still starting. Ours looped for as long as the app stayed in
-// Shell.AppState.STARTING, which for a slow starter like Chrome (which
-// sits in STARTING for many seconds) meant an icon that kept hopping
-// long after it stopped being informative — the "fica muito tempo
-// pulando" report. Fast apps leave STARTING quickly, which is why they
-// looked fine and only Chrome stood out.
+// app is still starting. Looping for as long as the app stays in
+// Shell.AppState.STARTING would mean a slow starter like Chrome (which
+// sits in STARTING for many seconds) keeps hopping long after it stops
+// being informative; fast apps leave STARTING quickly enough that it
+// wouldn't show either way.
 const LAUNCH_BOUNCE_COUNT = 3;
 
 export const DockAppIcon = GObject.registerClass(
@@ -57,7 +56,7 @@ class DockAppIcon extends AppDisplay.AppIcon {
 
         this._launchBouncing = false;
         // Filled in by DockManager. `removeAction` is what backs the
-        // "Remover da Dock" item on icons that are only present because the
+        // "Remove from Dock" item on icons that are only present because the
         // app was used recently; `progress` is the Unity LauncherEntry
         // progress bar (see setProgress).
         this.removeAction = null;

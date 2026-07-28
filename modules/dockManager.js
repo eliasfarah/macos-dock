@@ -125,7 +125,7 @@ export class DockManager {
         this._appIcons = new Map(); // appId -> DockAppIcon
         this._stackIcons = new Map(); // stack id -> DockFolderIcon
         this._redisplayIdle = 0;
-        // How many closed-recent slots "Remover da Dock" has suppressed —
+        // How many closed-recent slots "Remove from Dock" has suppressed —
         // see _forgetRecentApp() and _recentWindowIds(). Persisted, so a
         // gap the user made survives a reboot; the real value is loaded in
         // _loadRecentAppsState().
@@ -428,25 +428,21 @@ export class DockManager {
      * Lets the strut start reserving space — deliberately NOT done while
      * the login overview-exit is still on screen.
      *
-     * The "faixa preta" at session start (photographed at 16:07 on a shell
-     * started 16:06:59, i.e. WITH all the stage-wide redraws below already
-     * fired) survives full-stage repaints, so it is not a stale
-     * framebuffer: the scene itself still contains it. What the scene
-     * contains is the overview's HIDDEN-state frame — no-overview@fthx
-     * calls Main.overview.hide() at startup-complete, and that hide can
-     * wedge before _hideDone() ever runs, leaving overviewGroup visible,
-     * frozen on a frame whose wallpaper is sized to the WORK AREA
-     * (overviewControls' _computeWorkspacesBoxForState). Our strut is what
-     * shortens that work area, so the frozen frame shows wallpaper cut off
-     * above the dock with black below it. "Opening any app fixes it"
-     * because activating a dock icon runs AppIcon.activate(), which calls
-     * Main.overview.hide() again — completing the wedged hide.
+     * A black band under the dock at session start traces back to
+     * no-overview@fthx's Main.overview.hide() call wedging before
+     * _hideDone() runs: overviewGroup stays visible, frozen on a frame
+     * whose wallpaper is sized to the work area (see
+     * overviewControls._computeWorkspacesBoxForState). Our strut is what
+     * shrinks that work area, so the frozen frame shows wallpaper cut off
+     * above the dock with black below it. Activating any dock icon fixes
+     * it as a side effect, because AppIcon.activate() calls
+     * Main.overview.hide() again, completing the wedged hide.
      *
      * Two-part fix: (1) the strut only starts reserving space once the
      * overview is genuinely hidden, so every startup frame keeps a
      * full-height wallpaper and there is nothing black to freeze on; and
-     * (2) a watchdog (see _scheduleOverviewWatchdog) issues the same
-     * Main.overview.hide() the user's manual workaround relied on.
+     * (2) a watchdog (see _scheduleOverviewWatchdog) issues that same
+     * Main.overview.hide() itself, in case the wedge happens anyway.
      */
     _settleStrut() {
         if (this._strutSettled)
@@ -464,18 +460,16 @@ export class DockManager {
      * checks run 1s+ after startup-complete, so matching the predicate
      * then means the transition is dead, not merely slow.
      *
-     * Two arms, verified against the installed GNOME 50 overview.js
-     * (extracted from libshell-18.so): hide() early-returns unless
-     * `_shown` is still true, so it only repairs the state where the hide
-     * request itself got lost. The state this machine actually wedges
-     * into is the other one — hide() ran, `_shown` went false,
-     * `_animateNotVisible()` started `animateFromOverview()`, and that
-     * ease's completion callback never fired, leaving `_visible` stuck
-     * true with the cover pane up and the workspace clones frozen at
-     * work-area size. `_hideDone()` is precisely the dropped callback
-     * (resets `_visible`/`_animationInProgress`, hides overviewGroup,
-     * re-syncs the grab), so calling it is finishing the shell's own
-     * transition, not improvising a new teardown.
+     * `hide()` (see overview.js) early-returns unless `_shown` is still
+     * true, so it only repairs the case where the hide request itself got
+     * lost. The wedge this guards against is the other case: hide() ran,
+     * `_shown` went false, `_animateNotVisible()` started
+     * `animateFromOverview()`, and that ease's completion callback never
+     * fired — leaving `_visible` stuck true with the cover pane up and the
+     * workspace clones frozen at work-area size. `_hideDone()` is exactly
+     * that dropped callback (resets `_visible`/`_animationInProgress`,
+     * hides overviewGroup, re-syncs the grab), so calling it finishes the
+     * shell's own transition rather than improvising a new teardown.
      * The last check also force-settles the strut: whatever happened to
      * the overview, the dock must eventually reserve its space or
      * maximized windows would cover it for the rest of the session.
@@ -828,10 +822,7 @@ export class DockManager {
      *
      * macOS shrinks its Dock's icons as you pin more to it, so the bar
      * never runs off the screen — the preference is the size you get when
-     * there is room for it, not a fixed size. Ours simply kept the
-     * preferred size and let the row overflow the glass (and then the
-     * monitor) once enough icons were pinned, which is what "se o usuario
-     * inserir muitos pin de apps como vai se comportar" is about.
+     * there is room for it, not a fixed size.
      *
      * Solved by search rather than algebra: the row's width is not a linear
      * function of the icon size, because both the inter-icon spacing and
@@ -1055,10 +1046,10 @@ export class DockManager {
         // It starts `dockWindowGap` px *above* the bar rather than at its
         // top edge. The strut is what decides where a maximized window
         // stops, and with the strut flush against the glass a maximized
-        // window's own edge touched the dock with no gap at all — the
-        // "colada" in his report, and the reason for the new preference.
-        // Purely a strut change: the visible bar does not move, so raising
-        // the gap pushes windows up rather than pushing the dock down.
+        // window's own edge touched the dock with no gap at all — hence
+        // this preference. Purely a strut change: the visible bar does not
+        // move, so raising the gap pushes windows up rather than pushing
+        // the dock down.
         if (this._strutActor && monitor) {
             const stripY = Math.round(y) - this._settings.dockWindowGap;
             const stripHeight = Math.round(monitor.y + monitor.height - stripY);
@@ -1080,33 +1071,16 @@ export class DockManager {
     }
 
     /**
-     * Watches for the bar being moved by anything that is not this class.
+     * Watches for the bar being moved by anything that is not this class —
+     * a fullscreen app's mode switch, a monitor hotplug settling, a
+     * cancelled autohide spring — none of which a fixed virtual-monitor
+     * test setup can reproduce.
      *
-     * Reported as "a dock em algum momento para de flutuar / ela se move
-     * sozinha", with the giveaway that the running-app dots sometimes
-     * vanish: those dots sit flush against the glass's bottom edge
-     * (measured off his screenshots — 5px tall, ending exactly on the rim),
-     * so losing them means the bar's bottom has gone past the screen edge,
-     * i.e. it is sitting lower than _layoutDock() ever asks for.
-     *
-     * _layoutDock() itself was cleared of suspicion first, in the isolated
-     * headless session: instrumented across icon sizes and through a forced
-     * auto-shrink, the actor's real allocation matched the requested
-     * geometry exactly every time (min == natural == metrics.height, always
-     * exactly `margin` px of screen left below it), so the bar is not
-     * overflowing its own request and the arithmetic is not wrong. The
-     * remaining candidates all live outside what a virtual monitor can
-     * reproduce — a fullscreen game taking the display through a mode
-     * switch, lock/unlock, a monitor hotplug settling — which is precisely
-     * the class of thing this machine's NVIDIA/Wayland session produces and
-     * the harness never does.
-     *
-     * So rather than guess at which one it is, the geometry is treated as
-     * an invariant: whenever the actor's own allocation stops agreeing with
-     * the freshly computed target it is put back, and the disagreement is
-     * logged with every number needed to identify the culprit. That fixes
-     * the symptom now and leaves a journal line naming the cause the next
-     * time it happens.
+     * Rather than chase each cause individually, the geometry is treated
+     * as an invariant: whenever the actor's own allocation stops agreeing
+     * with the freshly computed target, it is put back, and the
+     * disagreement is logged with every number needed to identify the
+     * culprit.
      *
      * Deliberately only the *vertical* geometry is policed. Hover
      * magnification legitimately owns x and width (_stepDockWidth rewrites
@@ -1160,8 +1134,8 @@ export class DockManager {
         if (now - this._lastGeometryFix < GEOMETRY_FIX_COOLDOWN)
             return;
 
-        const detail = `y=${haveY} (esperado ${wantY}), altura=${haveHeight} (esperada ${height}), ` +
-            `translation_y=${this._dockActor.translation_y}, margem=${margin}, ` +
+        const detail = `y=${haveY} (expected ${wantY}), height=${haveHeight} (expected ${height}), ` +
+            `translation_y=${this._dockActor.translation_y}, margin=${margin}, ` +
             `monitor=${monitor.x},${monitor.y} ${monitor.width}x${monitor.height}, ` +
             `overview=${Main.overview.visible}, autohide=${this._settings.dockAutohide}`;
 
@@ -1174,7 +1148,7 @@ export class DockManager {
             if (!this._dockActor || this._chromeGone || this._tearingDown)
                 return GLib.SOURCE_REMOVE;
             this._lastGeometryFix = GLib.get_monotonic_time();
-            console.warn(`macos-dock-stack: a dock saiu do lugar e foi recolocada — ${detail}`);
+            console.warn(`macos-dock-stack: dock geometry drifted, repositioned — ${detail}`);
             if (!this._settings.dockAutohide)
                 this._dockActor.translation_y = 0;
             this._layoutDock();
@@ -1196,17 +1170,14 @@ export class DockManager {
      * simply persisted for the rest of the session: the bar sat flush
      * against the screen edge with no margin until some unrelated
      * preference change happened to re-trigger a layout, at which point it
-     * silently corrected itself. That is exactly the "dock parece que ta
-     * andando sozinha" report — it was not moving on its own, it was stuck
-     * wrong and then got fixed by the next settings write.
+     * silently corrected itself — a dock that appears to reposition itself
+     * on its own, when really it was just stuck wrong from login.
      *
      * Two cheap subscriptions close it: 'workareas-changed' fires whenever
      * any strut on the display changes (including other panels' and our
-     * own), and 'startup-complete' fires once the shell has finished
-     * bringing the session up. Both verified to exist on this version —
-     * 'workareas-changed' is on global.display (ui/panel.js and
-     * ui/workspace.js use it), 'startup-complete' is declared in
-     * LayoutManager's own Signals block.
+     * own — declared on global.display, see ui/panel.js/ui/workspace.js),
+     * and 'startup-complete' fires once the shell has finished bringing
+     * the session up (declared in LayoutManager's own Signals block).
      *
      * Feeding our own strut change back in as a 'workareas-changed' cannot
      * run away: _layoutDock() derives its geometry from the *monitor* rect,
@@ -1365,10 +1336,7 @@ export class DockManager {
     // dock-* preference (icon size, edge margin, autohide, magnification)
     // had a working GSettings default but no live effect at all once the
     // dock was already built: changing them in Preferences silently did
-    // nothing until the next logout/login rebuilt everything from
-    // scratch. That's the concrete bug behind "não consigo diminuir o
-    // tamanho da dock" — there wasn't a missing feature so much as a
-    // missing listener.
+    // nothing until the next logout/login rebuilt everything from scratch.
     _onSettingChanged(key) {
         switch (key) {
         case 'stacks':
@@ -1447,10 +1415,8 @@ export class DockManager {
      * nothing, the same program comes back under a *different* synthetic
      * id, and _recordRecentApps() files it as a brand-new recent that
      * pushes the genuine entries one place further down the queue until
-     * they fall off the end of it. That is the mechanism behind "quando
-     * reinicio os apps recentes mudam" — his stored queue held four of
-     * them (window:60, window:30, window:35, window:26) interleaved with
-     * the real entries.
+     * they fall off the end of it — the recents section visibly reshuffling
+     * across a reboot even though nothing about it should have changed.
      */
     _isPersistentAppId(id) {
         return typeof id === 'string' && id.endsWith('.desktop');
@@ -1511,11 +1477,10 @@ export class DockManager {
      * redisplay — can touch the queue, and even then only if the app is
      * not already inside the visible window (see _recentWindowIds). So
      * re-focusing, quitting, or relaunching something the dock is already
-     * showing leaves the order completely alone, which is what commit
-     * a02728c was after; but launching an app the dock is *not* showing
-     * pulls it to the front, so the icon it gains is one the queue can
-     * reproduce after a reboot instead of one that exists only for as long
-     * as the process does.
+     * showing leaves the order completely alone; but launching an app the
+     * dock is *not* showing pulls it to the front, so the icon it gains is
+     * one the queue can reproduce after a reboot instead of one that
+     * exists only for as long as the process does.
      */
     _recordRecentApps() {
         // Tracked before the early return below, so raising the preference
@@ -1538,7 +1503,7 @@ export class DockManager {
             return;
 
         // Opening an app is the only thing allowed to reclaim a slot that
-        // "Remover da Dock" suppressed — see _forgetRecentApp().
+        // "Remove from Dock" suppressed — see _forgetRecentApp().
         this._setForgottenRecentSlots(this._forgottenRecentSlots - promote.length);
 
         // Trimmed generously rather than to the exact preference: lowering
@@ -1559,17 +1524,16 @@ export class DockManager {
      * subtracted from it, which made the slice of the queue that reached
      * the dock a function of the current session: with two unpinned apps
      * open the section rendered queue[0] plus those two, and after a
-     * reboot the identical queue rendered queue[0..2] instead. Same stored
-     * data, different dock — "os apps recentes mudam desde o último boot".
-     * Deriving the window from the queue alone makes the section
-     * reproducible: it comes back showing exactly what it showed before,
-     * in the same order.
+     * reboot the identical queue rendered queue[0..2] instead — same
+     * stored data, different dock. Deriving the window from the queue
+     * alone makes the section reproducible: it comes back showing exactly
+     * what it showed before, in the same order.
      *
-     * (The budget that motivated the old subtraction — "estao ficando mais
-     * de tres apps mesmo definido 3" — is preserved: running unpinned apps
-     * now land *inside* this window, because launching one promotes it
-     * there. Only an app open beyond the budget still hangs off the end,
-     * and dropping its icon while it is open was never an option.)
+     * (The budget that motivated the old subtraction is preserved: running
+     * unpinned apps now land *inside* this window, because launching one
+     * promotes it there. Only an app open beyond the budget still hangs
+     * off the end, and dropping its icon while it is open was never an
+     * option.)
      *
      * `_forgottenRecentSlots` shrinks the budget: removing a recent icon
      * should not immediately pull an older one out of history to fill the
@@ -1686,7 +1650,7 @@ export class DockManager {
         // Run after the row is built, so icons created by iconFor() in this
         // same pass are covered too.
         //
-        // "Remover da Dock" is offered only on icons that are on the dock
+        // "Remove from Dock" is offered only on icons that are on the dock
         // *purely* because the app was used recently — a pinned app is
         // removed by unpinning it (GNOME's own menu item, which AppMenu
         // already shows), and a running one cannot be removed at all while
@@ -1925,10 +1889,9 @@ export class DockManager {
 
         // Scaling an icon in place (pivot at bottom-center) grows it
         // symmetrically left/right without the row's layout making any
-        // room for that growth, so two adjacent magnified icons visually
-        // collide/overlap — confirmed live via screenshots showing the
-        // two stack icons stuck together on hover. Real macOS (and every
-        // other dock-magnify implementation) compensates by nudging each
+        // room for that growth, so two adjacent magnified icons would
+        // visually collide/overlap. Real macOS (and every other
+        // dock-magnify implementation) compensates by nudging each
         // icon along X by half the accumulated "extra width" contributed
         // by every already-grown icon on its near side, and away from
         // every grown icon on its far side — a prefix-sum translation

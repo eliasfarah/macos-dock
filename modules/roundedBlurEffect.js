@@ -12,18 +12,16 @@
  *
  * This effect doesn't touch Shell.BlurEffect at all. It reimplements the
  * same mechanism directly, mirroring the real GNOME Shell 50 source
- * (src/shell-blur-effect.c, fetched from
- * https://gitlab.gnome.org/GNOME/gnome-shell for this):
+ * (src/shell-blur-effect.c):
  *
  *   - `paint_node()` (here: vfunc_paint_node) captures "what is behind
- *     the panel" into an offscreen texture. Since DIAG 3 (below) this is
- *     NOT done the way the reference does it (a `Clutter.BlitNode` copy
- *     of the live stage framebuffer): that read is driver-dependent and
- *     comes back solid black on this machine. Instead the actor carries a
- *     `Clutter.Clone` of the wallpaper (see glass.js for the full history
- *     — DIAG 3 and 4), and this effect simply paints the actor's own
- *     content — that clone, aligned by `_alignBackdrop()` — into the
- *     blur's input framebuffer.
+ *     the panel" into an offscreen texture. This is NOT done the way the
+ *     reference does it (a `Clutter.BlitNode` copy of the live stage
+ *     framebuffer): that read is driver-dependent and can come back solid
+ *     black on some NVIDIA/Wayland setups. Instead the actor carries a
+ *     `Clutter.Clone` of the wallpaper (see glass.js), and this effect
+ *     simply paints the actor's own content — that clone, aligned by
+ *     `_alignBackdrop()` — into the blur's input framebuffer.
  *   - That texture is blurred with `Clutter.BlurNode`, the same public
  *     Clutter primitive Shell.BlurEffect itself uses internally — so the
  *     blur quality/cost is the same, not a hand-rolled approximation.
@@ -42,10 +40,9 @@
  * for large radii (a real perf optimisation there, skipped here for a
  * first correct version — the panel sizes in this dock are modest).
  * Also dropped: stage-view scale-factor correction (`get_stage_view()` on
- * `Clutter.PaintContext` doesn't exist in this system's installed Clutter
- * typelib at all — the upstream source fetched was newer than what's
- * installed — so this assumes scale 1, fine for this non-fractional-
- * scaling setup but worth revisiting on a HiDPI/fractional-scale system).
+ * `Clutter.PaintContext` isn't available in every installed Clutter
+ * typelib), so this assumes scale 1 — fine for non-fractional-scaling
+ * setups but worth revisiting on a HiDPI/fractional-scale system.
  */
 
 import Clutter from 'gi://Clutter';
@@ -53,82 +50,64 @@ import Cogl from 'gi://Cogl';
 import Graphene from 'gi://Graphene';
 import GObject from 'gi://GObject';
 
-// DIAG (2026-07-27): two real bugs were found here via a live pixel-readback
-// test (Shell.Screenshot.pick_color on a headless test scene, comparing a
-// plain backdrop against the same backdrop under this effect — see
-// modules/_diagCorner.js). Neither is what the original "uninitialised Cogl
-// texture" theory in the node-tree comment below assumed.
+// Three non-obvious shader/pipeline gotchas the fragment/composite code
+// below routes around:
 //
-// 1. `cogl_tex_coord0_in` does not vary per-fragment inside this pipeline-
-//    level FRAGMENT snippet — every pixel of the quad read back the exact
-//    same value, so the corner mask was always evaluated at one fixed point
-//    (reading as "always inside", mask≈1 everywhere). Swapping in a custom
-//    VERTEX-hook varying carrying `cogl_position_in` had the *same* problem
-//    (frozen at a different fixed point instead). `gl_FragCoord.xy` — a
-//    true per-fragment rasteriser output, not something threaded through our
-//    own vertex/varying plumbing — was confirmed live to vary correctly
-//    across the quad and is what actually fixes this.
+// 1. `cogl_tex_coord0_in` does not vary per-fragment inside a pipeline-
+//    level FRAGMENT snippet — every pixel of the quad reads back the exact
+//    same value, so a corner mask built from it is always evaluated at one
+//    fixed point (mask≈1 everywhere, i.e. "always inside"). A VERTEX-hook
+//    varying carrying `cogl_position_in` has the same problem (frozen at a
+//    different fixed point instead). `gl_FragCoord.xy` — a true
+//    per-fragment rasteriser output, not something threaded through our own
+//    vertex/varying plumbing — is what actually varies correctly across
+//    the quad.
 //
-//    DIAG 2 (2026-07-27, later the same day — the bottom-left "mancha"):
-//    `gl_FragCoord` varies correctly, but it is in *device coordinates of
-//    the framebuffer being drawn into*, origin at the bottom-left of the
-//    screen — not in the quad's own 0..width/0..height space this shader
-//    assumes. Drawn straight to the stage, the rounded-box test was
-//    therefore anchored to the screen's bottom-left corner instead of to
-//    the dock: only the dock's left end overlapped it (mask≈1, blur
-//    visible), the rest read mask=0 (blur layer fully transparent). That
-//    is exactly the reported symptom — a left-side patch that is dark
-//    when a dark maximized window sits behind the dock and light over the
-//    wallpaper — and it slipped through the headless screenshot check
-//    because that backdrop was a flat colour, over which blurred and
-//    unblurred pixels are identical. The fix keeps `gl_FragCoord` but
-//    changes *where this pipeline draws*: the mask pass now renders into
-//    a dedicated offscreen of exactly texWidth×texHeight (where device
-//    coords ARE local coords, whatever the dock's position on screen),
-//    and a final plain pass copies the finished result to the stage. The
-//    y-axis may be flipped relative to the actor in that offscreen, but
-//    the rounded-box SDF is symmetric in both axes, so that is harmless.
-//    DIAG 3 (2026-07-27, evening — "quando maximiza a janela a dock volta a
-//    ficar toda preta"): with the mask finally covering the whole panel,
-//    the panel went uniformly, opaquely black whenever a maximized window
-//    was open — while the wallpaper strip *around* the dock (same pixels
-//    the blit reads: the strut keeps maximized windows above the dock, so
-//    the backdrop is still wallpaper) rendered normally. So the BlitNode
-//    copy of the live onscreen framebuffer was returning black-with-alpha
-//    despite the very same region displaying correctly on screen. This
-//    could not be reproduced in the isolated harnesses at all — both
-//    `--headless` and GNOME 50's pipewire-based `--devkit` render stage
-//    views into *offscreen* framebuffers, where the same blit works fine
-//    (verified with real screenshots: window forced behind the dock,
-//    glass correct) — and the machine's real session is the only real
-//    CoglOnscreen: gnome-shell on an NVIDIA RTX 3080 via nvidia-drm/GBM,
-//    a driver stack notorious for exactly this class of
-//    read-back-from-the-window-system-buffer breakage (GNOME Shell itself
-//    only ever blits *full-screen* regions in its own BACKGROUND-mode
-//    uses, so the partial-region-from-onscreen path is essentially
-//    unexercised upstream). Rather than fight the driver, the capture
-//    was rearchitected to never touch the screen framebuffer: the actor
-//    holds a Clutter.Clone and this effect paints that clone into the
-//    blur input instead of blitting. `_alignBackdrop()` keeps the clone
-//    registered with the panel's stage position (and inverse scale, for
-//    the stack panel's opening spring) every paint.
-//    DIAG 4 (2026-07-27, night — "qualquer animação fica lenta/quebrada
-//    até abrir o primeiro app"): the clone's first source,
-//    global.window_group (wallpaper + every window), poisoned the whole
-//    session's rendering — every window's damage re-rendered the entire
-//    desktop through this effect, a permanently mapped clone of all
-//    windows defeated mutter's occlusion culling stage-wide, and it
-//    required disable_unredirect(). The clone now sources the wallpaper
-//    only (Main.layoutManager._backgroundGroup) — see glass.js.
-// 2. Even with a correctly-varying mask, the corner still bloomed bright:
-//    `cogl_color_out.a *= mask` was applied without also scaling `.rgb`, but
-//    Cogl's default pipeline blending is premultiplied
-//    (ONE, ONE_MINUS_SRC_ALPHA) — at partial/zero alpha this *adds* the full
-//    unmasked colour on top of whatever is behind instead of fading it out
-//    (confirmed by exact arithmetic: a brightness=3 test on a (90,40,40)
-//    backdrop read back (255,160,160) = clamp(90*3)+90, clamp(40*3)+40 —
-//    literally backdrop-plus-source, the additive signature of this exact
-//    mismatch). Scaling `.rgb` by `mask` too (premultiplying) fixes it.
+//    `gl_FragCoord` is in *device coordinates of the framebuffer being
+//    drawn into*, origin at that framebuffer's bottom-left — not in the
+//    quad's own 0..width/0..height space the shader assumes. Drawn
+//    straight to the stage, that anchors the rounded-box mask to the
+//    screen's bottom-left corner instead of to the panel, so only
+//    whichever edge of the panel happens to overlap the screen origin
+//    reads mask≈1 and the rest reads mask=0 (blur fully transparent there).
+//    The fix keeps `gl_FragCoord` but changes *where this pipeline draws*:
+//    the mask pass renders into a dedicated offscreen of exactly
+//    texWidth×texHeight (where device coords ARE local coords, whatever
+//    the panel's position on screen), and a final plain pass copies the
+//    finished result to the stage. The y-axis may be flipped relative to
+//    the actor in that offscreen, but the rounded-box SDF is symmetric in
+//    both axes, so that is harmless.
+//
+//    Capturing the backdrop via `Clutter.BlitNode` (a copy of the live
+//    onscreen framebuffer) is driver-dependent in the same way: some
+//    NVIDIA/Wayland stacks return black-with-alpha for a partial-region
+//    onscreen readback even though the same pixels display correctly on
+//    screen and the identical blit works fine against an *offscreen*
+//    framebuffer (GNOME Shell itself only ever blits full-screen regions
+//    in its own BACKGROUND-mode uses, so this partial-region-from-onscreen
+//    path is essentially unexercised upstream). The fix avoids the onscreen
+//    readback entirely: the actor holds a `Clutter.Clone` and this effect
+//    paints that clone into the blur input instead of blitting.
+//    `_alignBackdrop()` keeps the clone registered with the panel's stage
+//    position (and inverse scale, for the stack panel's opening spring)
+//    every paint.
+//
+//    The clone's source matters too: cloning `global.window_group`
+//    (wallpaper + every window) makes every window's damage re-render the
+//    entire desktop through this effect, and a permanently mapped clone of
+//    all windows defeats mutter's occlusion culling stage-wide — a
+//    session-wide animation slowdown for what should be a purely local
+//    effect. Cloning the wallpaper only
+//    (`Main.layoutManager._backgroundGroup`, see glass.js) avoids both: it
+//    is static, so window animations never touch the dock's paint at all.
+//
+// 2. Even with a correctly-varying mask, the corner can bloom bright:
+//    `cogl_color_out.a *= mask` applied without also scaling `.rgb` adds
+//    the full unmasked colour on top of whatever is behind instead of
+//    fading it out, because Cogl's default pipeline blending is
+//    premultiplied (ONE, ONE_MINUS_SRC_ALPHA) — at partial/zero alpha that
+//    is additive, not a fade. Scaling `.rgb` by `mask` too
+//    (premultiplying) fixes it.
 const FINAL_DECLARATIONS = `
 uniform float brightness;
 uniform float corner_radius;
@@ -169,10 +148,11 @@ function createFinalPipeline(ctx) {
     const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, FINAL_DECLARATIONS, FINAL_SNIPPET);
     pipeline.add_snippet(snippet);
     // This pipeline no longer draws to the stage — it draws into the
-    // persistent `_out` offscreen (see DIAG 2 above). Blending must be
-    // off for that: the corner fragments have alpha < 1, and blending
-    // them over the previous frame's texels would accumulate ghosting
-    // instead of replacing them.
+    // persistent `_out` offscreen, so `gl_FragCoord` stays in that
+    // offscreen's own local coordinate space (see the header comment).
+    // Blending must be off for that: the corner fragments have alpha < 1,
+    // and blending them over the previous frame's texels would accumulate
+    // ghosting instead of replacing them.
     pipeline.set_blend('RGBA = ADD (SRC_COLOR, 0)');
     return {
         pipeline,
@@ -208,9 +188,10 @@ function updateFbo(ctx, data, width, height) {
 // Only the width is bucketed. The height is allocated exactly, and must
 // stay that way: `gl_FragCoord` has its origin at the framebuffer's
 // *bottom* left, so slack at the top would shift the whole rounded-rect
-// mask off the panel, which is the DIAG 2 bug all over again. Slack on
-// the right is harmless because that axis's origin is the edge the panel
-// is already anchored to. (The dock's height doesn't animate anyway —
+// mask off the panel (see the header comment on device vs. local
+// coordinates). Slack on the right is harmless because that axis's origin
+// is the edge the panel is already anchored to. (The dock's height
+// doesn't animate anyway —
 // it only changes when the icon-size preference does.)
 const WIDTH_BUCKET = 128;
 
@@ -353,18 +334,20 @@ class RoundedBackgroundBlurEffect extends Clutter.Effect {
         this._final.pipeline.set_uniform_1f(this._final.cornerRadiusLoc, this._cornerRadius);
         this._final.pipeline.set_uniform_float(this._final.pixelSizeLoc, 2, 1, [texWidth, texHeight]);
 
-        // Input half (diverges from shell-blur-effect.c since DIAG 3):
-        // blurNode blurs whatever paints into it, and what paints into it
-        // is the actor's own content — the aligned wallpaper clone —
-        // via a plain ActorNode. The actor's paint lands in blurNode's
-        // internal framebuffer in actor-local coordinates (its transform
-        // chain was applied to the *stage* framebuffer's matrix stack, and
-        // matrix stacks are per-framebuffer), so the fb window [0..w,0..h]
-        // shows exactly the panel-sized slice of the clone; everything
-        // beyond it falls outside the fb and costs nothing.
+        // Input half (diverges from shell-blur-effect.c, which blits the
+        // stage instead — see the header comment on why that read is
+        // avoided here): blurNode blurs whatever paints into it, and what
+        // paints into it is the actor's own content — the aligned
+        // wallpaper clone — via a plain ActorNode. The actor's paint lands
+        // in blurNode's internal framebuffer in actor-local coordinates
+        // (its transform chain was applied to the *stage* framebuffer's
+        // matrix stack, and matrix stacks are per-framebuffer), so the fb
+        // window [0..w,0..h] shows exactly the panel-sized slice of the
+        // clone; everything beyond it falls outside the fb and costs
+        // nothing.
         //
-        // Composite half, unchanged from DIAG 2: the corner mask reads
-        // `gl_FragCoord`, which is only meaningful in an offscreen whose
+        // Composite half: the corner mask reads `gl_FragCoord`, which is
+        // only meaningful in an offscreen whose
         // device coords are the quad's own local coords. So blurTargetNode
         // collects the blurred pixels into `_final.framebuffer` (drawing
         // nothing itself — no rectangle is added); maskNode then draws them

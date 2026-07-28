@@ -48,15 +48,12 @@ const FAN_ROW_HEIGHT = 68; // vertical distance between consecutive items
 // a flat per-row lean either looks like nothing on a five-item fan or like a
 // diagonal on a fifteen-item one.
 //
-// The unit was first calibrated on the reference shot, which has four
-// folders plus the Open in Finder cap: five rows, i.e. a top index of 4,
-// and a measured drift of about 9px against 56px icons — 0.01 x 56 x 4^2.
-// That reference is simply too short to show much bend, and calibrating the
-// whole curve on it made a real, taller fan read as a straight column ("a
-// curvatura do leque parece que nao existe"). Raised once to 0.018 (five-row
-// drift ~16px), then again here to 0.03 after he asked for more bend a
-// second time ("pode encurvar mais a stack de pilha") — a five-row fan now
-// drifts ~27px. FAN_ARC_MAX is scaled up by the same factor so a full
+// The unit was first calibrated on a reference screenshot of four folders
+// plus the Open in Finder cap — five rows, top index 4, ~9px of drift
+// against 56px icons (0.01 x 56 x 4^2). A reference that short can't show
+// much bend, so calibrating the whole curve on it made a taller, real fan
+// read as a nearly straight column; raised to 0.03 so a five-row fan drifts
+// ~27px instead. FAN_ARC_MAX is scaled up by the same factor so a full
 // fifteen-item fan still hits its ceiling just before the top row, same as
 // before, instead of flattening out several rows early. The quadratic shape
 // is unchanged: the column leaves the dock icon vertically and swings
@@ -65,8 +62,8 @@ const FAN_ARC_UNIT = FAN_ICON_SIZE * 0.03;
 const FAN_ARC_MAX = Math.round(FAN_ICON_SIZE * 4.2);
 // How many files the fan will show. macOS switches to Grid once a folder
 // outgrows the screen; this instead keeps the fan and shows the newest
-// items, capped, with the Open in Finder row as the way to the rest — his
-// call, and it means a busy Downloads folder still opens as a fan.
+// items, capped, with the Open in Finder row as the way to the rest, so a
+// busy Downloads folder still opens as a fan.
 const FAN_MAX_ITEMS = 15;
 // macOS keeps the icons and their name plates upright: the arc is in the
 // path the column takes, not in the items themselves. Ours tilted every
@@ -476,40 +473,21 @@ export class Stack {
 
         this._shadow = createShadowActor({ cornerRadius: CORNER_RADIUS });
 
-        // St.BoxLayout, not plain St.Widget: St.ScrollView.set_child()
-        // requires its child to implement the St.Scrollable interface
-        // (confirmed via GIRepository introspection —
-        // GObject.type_is_a(St.BoxLayout, St.Scrollable) is true,
-        // St.Widget's is false), which is also why the child actually
-        // gets allocated a size/position by the scroll view's own
-        // viewport logic. A previous fix swapped set_child() for
-        // add_child() to dodge the "cannot convert to StScrollable"
-        // exception that a plain St.Widget threw there — that stopped
-        // the crash, but add_child() only inserts the actor into the
-        // scene graph without ever feeding it through the scroll view's
-        // adjustment/allocation cycle, so the grid (and every item
-        // inside it) rendered with no allocation at all: invisible,
-        // confirmed live via "Can't update stage views ... needs an
-        // allocation" warnings in the real session's journal for
-        // exactly these actor types (StBoxLayout/StIcon/StLabel) — the
-        // panel chrome still showed, hence an empty-looking balloon.
-        // The layout_manager override below still applies on top of
-        // St.BoxLayout: _layoutGrid/_layoutFan/_layoutStack position
-        // each item with set_position(), which BoxLayout's own default
-        // layout would fight, but Clutter.FixedLayout (which honors
-        // manually-set positions) works the same on any St.Widget
-        // subclass regardless of which one it is.
-        // St.Viewport, not St.BoxLayout. Both implement St.Scrollable
-        // (which St.ScrollView.set_child() demands, and which a plain
-        // St.Widget fails), but St.BoxLayout carries its own box layout
-        // and quietly ignores an assigned layout_manager — so every
-        // set_position() call in _layoutGrid/_layoutList/_layoutFan was
-        // discarded and the items were simply packed left-to-right in a
-        // single row, whatever view was selected. Confirmed live: four
-        // items reported x=0/460/920/1380 with y=0 across the board.
-        // That is why an opened stack never resembled macOS in any mode.
-        // St.Viewport is what GNOME's own IconGrid extends for exactly
-        // this reason: scrollable *and* it honours its layout manager.
+        // St.Viewport, not St.BoxLayout or a plain St.Widget.
+        // St.ScrollView.set_child() requires its child to implement the
+        // St.Scrollable interface (GObject.type_is_a(St.Viewport,
+        // St.Scrollable) is true, St.Widget's is false) — without it the
+        // child never gets fed through the scroll view's own
+        // adjustment/allocation cycle, so it and everything inside it
+        // render with no allocation at all: invisible, even though the
+        // panel chrome around it still shows. St.BoxLayout does implement
+        // St.Scrollable, but it also carries its own box layout and
+        // quietly ignores an assigned layout_manager, which breaks the
+        // set_position()-based placement _layoutGrid/_layoutList/
+        // _layoutFan rely on (Clutter.FixedLayout, set below, honours
+        // manually-set positions instead). St.Viewport is what GNOME's own
+        // IconGrid extends for exactly this reason: scrollable *and* it
+        // honours its layout manager.
         this._gridWidget = new St.Viewport({
             style_class: 'macos-stack-grid',
             layout_manager: new Clutter.FixedLayout(),
@@ -620,10 +598,9 @@ export class Stack {
         // that same panel) ends up blurring that flat fill instead of
         // the desktop behind it — the blur radius, the sheen and the
         // border all still ran, but the result was a flat opaque grey
-        // slab. That is exactly the "fundo feio / não parece o do Mac"
-        // report. Capped well below full opacity so the blurred
-        // backdrop always stays visible through it, the way a real
-        // Finder stack reads.
+        // slab instead of glass. Capped well below full opacity so the
+        // blurred backdrop always stays visible through it, the way a
+        // real Finder stack reads.
         const alpha = (clamp(this._settings.panelOpacity, 20, 100) / 100) * 0.6;
 
         // The fan has no surface of its own. Hiding the decorative layers
@@ -962,14 +939,11 @@ export class Stack {
         });
 
         // Clutter.Text has no set_lines()/"max lines" API at all (that's
-        // a Gtk.Label-ism) — calling it threw a TypeError inside the
-        // async listDirectory callback every time a stack was opened,
-        // silently aborting the whole open (confirmed live via headless
-        // testing: this is why folder-stacks appeared to do nothing on
-        // click). The correct native way to clamp wrapped text to N
-        // lines with a trailing ellipsis is line_wrap + ellipsize
-        // together with a capped actor height — Pango wraps up to
-        // whatever fits in that height and ellipsizes the last line.
+        // a Gtk.Label-ism) — calling it throws a TypeError. The correct
+        // native way to clamp wrapped text to N lines with a trailing
+        // ellipsis is line_wrap + ellipsize together with a capped actor
+        // height — Pango wraps up to whatever fits in that height and
+        // ellipsizes the last line.
         const label = new St.Label({
             text: entry.name,
             style_class: 'macos-stack-item-label',
