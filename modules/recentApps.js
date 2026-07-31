@@ -14,35 +14,24 @@
  *
  * The row this describes has one zone, not two:
  *
- *     [pinned] | [open and recent apps, in the order they arrived] | [trash]
+ *     [pinned] | [open and recent apps, most recently used last] | [trash]
  *
- * Two rules, deliberately kept independent of each other:
+ * The rule the whole module exists to enforce: **the row is ordered by
+ * recency of use, and an icon that is already on screen does not jump while
+ * you are looking at it.** Those two clauses matter equally:
  *
- *   1. **An icon's position never moves.** A slot is assigned once, when an
- *      unpinned app first turns up on the dock, and it is the last slot in
- *      the row — the one nearest the trash. Launching appends on the
- *      right; everything already there keeps its place. Quitting, being
- *      reopened, being quit again — none of it relocates a slot once
- *      assigned. An app can sit to the left of one that arrived after it
- *      whether either of them is currently running or not: the row is
- *      arrival order, not running-first and not recency-first;
- *
- *   2. **Which remembered apps are in the visible window is recency of
- *      *use*, not of arrival.** Past the limit (default 3) the least
- *      recently closed slot is the one that drops out of view — and
- *      closing an app again, however long ago its slot was assigned, makes
- *      it the most recent once more and can bump a less-recently-touched
- *      one out. This is what "recent apps" means: the three you closed
- *      most recently, wherever they happen to sit.
- *
- * The two combine like this:
- *
- *   - launching an app appends it on the right if it has no slot yet;
- *     reopening one that already has a slot leaves it exactly where it was
- *     and touches nothing else;
- *   - quitting an app never moves it, but always refreshes how recently it
- *     was used — first close or fifth, the effect on the window is the
- *     same;
+ *   - an app that is *not currently shown* — brand new, or a recent that
+ *     has aged out of the visible window — takes the last slot, nearest
+ *     the trash, the moment it becomes relevant again: launching it, or
+ *     closing it, both count. This is what "recent" means: the ones you
+ *     most recently opened or closed, always in that order;
+ *   - an app that *is already shown* — running, or a recent still inside
+ *     the window — does not move just because you look at it or relaunch
+ *     it. Only a genuine quit relocates it, and only to say it was just
+ *     used;
+ *   - so quitting always sends an app to the end, whether it has never
+ *     been remembered before or has been sitting there quietly for weeks:
+ *     first close or fifth, the effect on the row is the same;
  *   - the *count* the limit checks is places the dock is holding, not apps
  *     that happen to be shut: an app stays in the sum while it is open, so
  *     reopening one cannot free a place and let an app that aged out long
@@ -58,12 +47,6 @@
  *
  * Focus is deliberately not an input. Switching between two open windows
  * must not disturb anything — only an actual quit does.
- *
- * Recency is session-only, not persisted: at every load() it is seeded from
- * arrival order (the only ordering a fresh boot has to go on), so the
- * section still comes back after a reboot showing exactly what it showed
- * before. It only diverges from arrival order once something is quit again
- * during the session.
  */
 
 // How many app ids the queue remembers on disk, independently of how many
@@ -91,13 +74,13 @@ export const RECENT_APPS_MAX_SUPPRESSED = 6;
 //           section outright. Counts written under that rule cannot be
 //           told apart from honest ones, so they are dropped.
 //
-//   1 -> 2  The list was stored most-recently-quit first and reversed for
-//           display, because close time decided position. Position is now
-//           fixed at arrival and close time decides nothing, so the list is
-//           stored in the order it is drawn, left to right. The two are
-//           exact reverses of each other, so state written under the old
-//           rule is migrated by reversing it — which keeps everyone's row
-//           looking the same across the upgrade instead of flipping it.
+//   1 -> 2  The list used to be stored most-recently-quit first and
+//           reversed for display. It is now stored in the order it is
+//           drawn, left to right, matching how every other field here is
+//           read. The two are exact reverses of each other, so state
+//           written under the old rule is migrated by reversing it — which
+//           keeps everyone's row looking the same across the upgrade
+//           instead of flipping it.
 export const RECENTS_FORMAT = 2;
 
 function clampInt(value, min, max) {
@@ -150,26 +133,21 @@ export class RecentApps {
         this._appExists = appExists;
         this._limit = limit;
 
-        // Every slot in the row, left to right — the running apps and the
-        // remembered ones in one list, because they share one ordering.
-        // Appended to at arrival and never resorted: this array *is* the
-        // promise that icons do not move.
+        // Every slot in the row, left to right, in recency order — the
+        // running apps and the remembered ones in one list, because they
+        // share one ordering. An id moves to the end whenever it becomes
+        // relevant again from having *not* been on screen (see _promote());
+        // an id already on screen is left alone by that same event, which
+        // is what stops an icon from jumping while it is in view.
         this._order = [];
         // Which of those slots belong to an app that has been quit at least
         // once, and so is remembered after it stops running. A slot not in
         // here lasts only as long as its app does. Always a subset of
         // _order, and only ever holds persistent ids.
         this._remembered = new Set();
-        // id -> how recently it was last retired, as a plain increasing
-        // counter (higher = more recent). This is the *other* half of
-        // "recent apps" — which remembered slots are worth showing right
-        // now — deliberately kept separate from _order so refreshing it
-        // never moves an icon. Only ever holds remembered ids.
-        this._recency = new Map();
-        this._recencySeq = 0;
         // What was running at the previous sync, to turn a new set of
-        // running apps into launches and quits. Not an ordering: the row's
-        // order lives in _order alone.
+        // running apps into launches and quits, and to know — before this
+        // sync's changes are applied — which ids were already visible.
         this._running = new Set();
         // How many visible slots "Remove from Dock" has emptied. Persisted,
         // so a gap the user made survives a reboot — see forget().
@@ -214,11 +192,6 @@ export class RecentApps {
         const cleaned = dedupe(migrated.filter(id => isPersistentAppId(id)));
         this._order = cleaned.slice(-RECENT_APPS_MEMORY);
         this._remembered = new Set(this._order);
-        // The only ordering a fresh boot has to go on: rightmost (closest to
-        // the trash) counts as most recently used until something is quit
-        // again and says otherwise.
-        this._recency = new Map(this._order.map((id, i) => [id, i]));
-        this._recencySeq = this._order.length;
         this._stored = [...this._order];
         // Compared against what was on disk, not against the migrated form.
         // The migration only ever runs once, so a reversal that is not
@@ -239,33 +212,33 @@ export class RecentApps {
      *
      * They do take slots, though, since they need icons: unpinned ones the
      * restored row does not already name are appended to it, after the
-     * remembered entries. An app that is both running and already
-     * remembered keeps the slot it was restored with — quit last session,
-     * relaunched at login, it comes back exactly where it was, wearing a
-     * running dot.
+     * remembered entries — but only if they were not already part of that
+     * restored, visible row (see _adopt()). An app that is both running and
+     * already shown keeps the slot it was restored with — quit last
+     * session, relaunched at login, it comes back exactly where it was,
+     * wearing a running dot.
      */
     seedRunning(runningIds) {
+        const wasVisible = new Set(this.visibleIds());
         this._running = new Set(runningIds);
-        this._adopt(runningIds);
+        this._adopt(runningIds, wasVisible);
     }
 
     /**
      * The row, left to right: every running unpinned app plus the
-     * remembered ones that are recent enough to still be in the window,
-     * drawn in *arrival* order (see _order) regardless of which of those
-     * two groups they belong to.
+     * remembered ones that still fit in the window, in the one recency
+     * order they all share (see _order/_promote()).
      *
      * The limit counts *remembered* entries — apps the dock is holding a
-     * place for — and keeps the ones most recently retired (see _retire),
-     * not the ones whose slot happens to sit rightmost. Whether such an app
-     * happens to be running right now is not part of the sum, and that is
-     * the point: the memory is deeper than the window (RECENT_APPS_MEMORY),
-     * so anything that shrinks the set being counted pulls an older app
-     * back into view. Counting only *closed* apps did exactly that —
-     * reopening a recent freed its place in the count and an unrelated app
-     * that had long since aged out reappeared beside it. So the rule is:
-     * launching or quitting an app adds or removes that app's own icon, and
-     * never anybody else's.
+     * place for — and takes them from the end, the most recently used
+     * slots. Whether such an app happens to be running right now is not
+     * part of the sum, and that is the point: the memory is deeper than the
+     * window (RECENT_APPS_MEMORY), so anything that shrinks the set being
+     * counted pulls an older app back into view. Counting only *closed*
+     * apps did exactly that — reopening a recent freed its place in the
+     * count and an unrelated app that had long since aged out reappeared
+     * beside it. So the rule is: launching or quitting an app adds or
+     * removes that app's own icon, and never anybody else's.
      *
      * A running app is still never dropped: one that has aged out of the
      * window, or was never remembered at all, is drawn because it is open.
@@ -280,12 +253,8 @@ export class RecentApps {
         // an app can be pinned while its id is still mid-flight here.
         const remembered = this._order.filter(id =>
             this._remembered.has(id) && !this._isPinned(id) && this._appExists(id));
-        const byRecency = [...remembered].sort((a, b) => this._recency.get(b) - this._recency.get(a));
-        const kept = new Set(byRecency.slice(0, windowSize));
+        const kept = new Set(remembered.slice(Math.max(0, remembered.length - windowSize)));
 
-        // kept is a membership test only — the row itself is still drawn in
-        // _order, i.e. arrival order, so being "recent enough" changes
-        // whether an icon shows, never where it sits.
         return this._order.filter(id => {
             if (this._isPinned(id))
                 return false;
@@ -295,20 +264,24 @@ export class RecentApps {
 
     /**
      * Folds the current set of running apps in: apps that appeared since
-     * the last call have launched and take the next slot on the right, apps
-     * that vanished have been quit and keep the slot they already had.
+     * the last call have launched (a fresh slot at the end if not already
+     * shown), apps that vanished have been quit (always a fresh slot at the
+     * end, full stop — see _retire()).
      *
      * App-level, not window-level: closing one window of an app that still
      * has others open does not change this set, so an app becomes a recent
      * only once its last window is gone — which is what Quit means. By the
      * same token opening a second window cannot produce a second slot.
      *
-     * @returns {boolean} whether the row's *contents* changed. A plain quit
-     *   returns false — the app keeps its slot, and only its running dot
-     *   goes out, which is DockManager's business and not the model's.
+     * @returns {boolean} whether the row *changed at all* — membership or
+     *   order. Quitting an app always moves it to the end (see _retire()),
+     *   so this is true even for an app that was already shown; DockManager
+     *   uses it only to decide whether a repaint is owed, not to guess
+     *   whether anything moved.
      */
     syncRunning(runningIds) {
         const visibleBefore = this.visibleIds();
+        const wasVisible = new Set(visibleBefore);
 
         const next = dedupe(runningIds);
         const nowRunning = new Set(next);
@@ -318,7 +291,7 @@ export class RecentApps {
         // Every running app that has no slot yet, not merely the ones that
         // launched since the last call: an app unpinned while it is running
         // arrives here the same way, and also needs one.
-        this._adopt(next);
+        this._adopt(next, wasVisible);
         for (const id of quit)
             this._retire(id);
         this._persist();
@@ -347,7 +320,6 @@ export class RecentApps {
         const emptiedASlot = visibleBefore.includes(appId) && !this._running.has(appId);
 
         this._remembered.delete(appId);
-        this._recency.delete(appId);
         if (!this._running.has(appId))
             this._order = this._order.filter(id => id !== appId);
         if (emptiedASlot)
@@ -380,10 +352,8 @@ export class RecentApps {
         const before = this._order;
         this._order = this._order.filter(id => !this._isPinned(id));
         for (const id of before) {
-            if (this._isPinned(id)) {
+            if (this._isPinned(id))
                 this._remembered.delete(id);
-                this._recency.delete(id);
-            }
         }
         this._persist();
         return !sameSequence(before, this._order);
@@ -397,7 +367,6 @@ export class RecentApps {
     clear() {
         const visibleBefore = this.visibleIds();
         this._remembered.clear();
-        this._recency.clear();
         this._order = this._order.filter(id => this._running.has(id));
         this._setSuppressed(0);
         this._persist();
@@ -405,29 +374,43 @@ export class RecentApps {
     }
 
     /**
-     * Gives a slot to each unpinned app that has none, in the order given,
-     * at the end of the row. This is the only place the row grows, and it
-     * only ever grows on the right — the half of "icons do not move" that
-     * arrivals are responsible for.
+     * Moves an id to the end of the row — the slot nearest the trash — or
+     * gives it one for the first time if it never had one. This is the one
+     * primitive that relocates anything: a brand-new arrival and an old
+     * recent coming back both go through it, and both land the same way.
      */
-    _adopt(ids) {
-        const seated = new Set(this._order);
+    _promote(id) {
+        this._order = this._order.filter(other => other !== id);
+        this._order.push(id);
+    }
+
+    /**
+     * Gives every unpinned running app a place in the row: a fresh slot at
+     * the end for one that is not currently shown (brand new, or an old
+     * recent that had aged out of the window), nothing at all for one that
+     * is already shown. `wasVisible` is visibleIds() from *before* this
+     * sync's changes, i.e. what the row looked like the moment before these
+     * apps became running — which is what tells apart "just reopened
+     * something aged-out" from "still looking at what was already there".
+     * Skipping the latter is the whole reason relaunching an app already on
+     * screen does not make its icon jump the instant you click it.
+     */
+    _adopt(ids, wasVisible) {
         for (const id of ids) {
-            if (seated.has(id) || this._isPinned(id))
+            if (this._isPinned(id) || wasVisible.has(id))
                 continue;
-            seated.add(id);
-            this._order.push(id);
+            this._promote(id);
         }
     }
 
     /**
-     * Hands a quit app over to the memory, in place, and marks it as the
-     * most recently used remembered app there is — that second part
-     * happens whether this is the first time this id has ever been retired
-     * or the tenth, which is what lets closing an old, aged-out recent pull
-     * it straight back into the visible window (see visibleIds()). An app
-     * that cannot be remembered gives its slot up instead — there is
-     * nothing to draw once it is neither running nor stored.
+     * Hands a quit app over to the memory and promotes it to the end of the
+     * row — unconditionally, whether this is the first time this id has
+     * ever been retired or the tenth. That is what "recent apps" means:
+     * the one you just closed is always the one nearest the trash,
+     * wherever it happened to be sitting before. An app that cannot be
+     * remembered gives its slot up instead — there is nothing to draw once
+     * it is neither running nor stored.
      */
     _retire(appId) {
         if (!this._order.includes(appId))
@@ -437,7 +420,6 @@ export class RecentApps {
             this._appExists(appId);
         if (!storable) {
             this._remembered.delete(appId);
-            this._recency.delete(appId);
             this._order = this._order.filter(id => id !== appId);
             return;
         }
@@ -455,28 +437,27 @@ export class RecentApps {
             this._remembered.add(appId);
             this._setSuppressed(this._suppressed - 1);
         }
-        this._recency.set(appId, this._recencySeq++);
+        this._promote(appId);
         this._enforceMemoryCap();
     }
 
     /**
      * Keeps the memory to RECENT_APPS_MEMORY entries by dropping the
-     * *least recently used* ones first — same rule as the visible window,
-     * just deeper. A running app only loses the memory, not the slot: its
-     * icon is on the dock because it is open, and moving it would be the
-     * one unforgivable thing.
+     * oldest slots — same end of the row the visible window drops, just
+     * deeper. A running app only loses the memory, not the slot: its icon
+     * is on the dock because it is open, and moving it would be the one
+     * unforgivable thing.
      */
     _enforceMemoryCap() {
         if (this._remembered.size <= RECENT_APPS_MEMORY)
             return;
 
-        const byRecency = [...this._remembered].sort((a, b) =>
-            this._recency.get(a) - this._recency.get(b));
-        for (const id of byRecency) {
+        for (const id of [...this._order]) {
             if (this._remembered.size <= RECENT_APPS_MEMORY)
                 break;
+            if (!this._remembered.has(id))
+                continue;
             this._remembered.delete(id);
-            this._recency.delete(id);
             if (!this._running.has(id))
                 this._order = this._order.filter(other => other !== id);
         }

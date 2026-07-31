@@ -1493,11 +1493,11 @@ export class DockManager {
         const runningById = new Map(runningApps.map(app => [app.get_id(), app]));
 
         // The whole trailing row in one list, running apps and recents
-        // alike, in the order the model assigned their slots — see
-        // RecentApps.visibleIds(). Nothing here is sorted by state: an app
-        // stays exactly where it arrived whether it is open, quit or
-        // reopened, which is the only way an icon never moves under the
-        // cursor.
+        // alike, in the recency order the model keeps — see
+        // RecentApps.visibleIds(). This is drawn as-is, not re-sorted here:
+        // the model already decides whether an id's slot moves (quitting
+        // it, or reopening one that had aged out of view, both do) or
+        // stays put (reopening one still on screen does not).
         const windowIds = this._recents.visibleIds();
 
         const trailingApps = [];
