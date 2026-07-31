@@ -11,7 +11,9 @@
  * GSettings storage, AppFavorites, Shell.AppSystem and the size preference.
  *
  * Every expectation here is in *display order*: left to right along the dock,
- * so the last id in an array is the one nearest the trash.
+ * so the last id in an array is the one nearest the trash. The rule almost
+ * every test below is really checking is that those indices do not change
+ * when an app opens or closes.
  */
 
 import {
@@ -123,9 +125,14 @@ class Session {
         return this;
     }
 
-    /** The whole trailing row, open zone first, exactly as the dock draws it. */
+    /** The whole trailing row, exactly as the dock draws it. */
     get row() {
-        return [...this.recents.openIds(), ...this.recents.visibleIds()];
+        return this.recents.visibleIds();
+    }
+
+    /** Where an app sits in that row, or -1. */
+    slotOf(id) {
+        return this.row.indexOf(id);
     }
 }
 
@@ -135,17 +142,16 @@ const CALC = 'org.gnome.Calculator.desktop';
 const EDITOR = 'org.gnome.TextEditor.desktop';
 const FILES = 'org.gnome.Nautilus.desktop';
 
-// -- open apps ------------------------------------------------------------
+// -- arrival --------------------------------------------------------------
 
-print('open apps');
+print('arrival');
 
-test('an open app is not a recent', () => {
+test('an open app takes the slot nearest the trash', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY);
 
-    assertEqual(session.recents.visibleIds(), [], 'nothing in the queue yet');
-    assertEqual(session.recents.openIds(), [SPOTIFY], 'shown because it is running');
-    assertEqual(world.stored, [], 'and nothing persisted');
+    assertEqual(session.row, [SPOTIFY], 'shown because it is running');
+    assertEqual(world.stored, [], 'and nothing persisted: it has not been quit');
 });
 
 test('open apps do not spend the limit of three', () => {
@@ -153,56 +159,61 @@ test('open apps do not spend the limit of three', () => {
     const session = new Session(world.started());
     session.open(SPOTIFY, DISCORD, CALC, EDITOR, FILES);
 
-    assertEqual(session.recents.openIds().length, 5, 'all five stay on the dock');
-    assertEqual(session.recents.visibleIds(), [], 'none of them is a recent');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC, EDITOR, FILES],
+        'all five stay on the dock, in launch order');
+    assertEqual(session.recents.ids, [], 'none of them is a recent yet');
 });
 
-test('open apps sit left of the recents', () => {
+test('a new app appears at the right end, whatever its neighbours are doing', () => {
+    // The row it lands on is deliberately mixed: a closed recent, then an
+    // app that is still open. Neither state pulls an icon towards an end.
     const world = new World();
     const session = new Session(world.started());
-    session.open(SPOTIFY).quit(SPOTIFY);
-    session.open(DISCORD);
+    session.open(SPOTIFY).quit(SPOTIFY);   // closed, slot 1
+    session.open(DISCORD);                 // open, slot 2
 
-    assertEqual(session.row, [DISCORD, SPOTIFY], 'the recent is the one by the trash');
+    session.open(CALC);
+
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'the newest is by the trash');
 });
 
-test('the open zone is ordered by launch, and a second window changes nothing', () => {
+test('launching moves nothing that is already on the row', () => {
     const world = new World();
     const session = new Session(world.started());
-    session.open(CALC, SPOTIFY, DISCORD);
+    session.open(SPOTIFY, DISCORD).quit(SPOTIFY);
+    const before = session.row;
 
-    // Another window of an app that is already running leaves the running
-    // *app* set alone, which is the only thing the model looks at.
-    assert(!session.recents.syncRunning([...session.running]), 'no change');
-    assertEqual(session.recents.openIds(), [CALC, SPOTIFY, DISCORD], 'launch order');
+    session.open(CALC, EDITOR);
+
+    assertEqual(session.row.slice(0, before.length), before, 'the old slots are untouched');
 });
 
 // -- quitting -------------------------------------------------------------
 
 print('quitting');
 
-test('quitting an unpinned app files it as the newest recent', () => {
+test('quitting an app leaves its icon exactly where it was', () => {
     const world = new World();
-    const session = new Session(world.started()).open(SPOTIFY);
+    const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
+    assertEqual(session.slotOf(DISCORD), 1);
 
-    assert(session.recents.syncRunning([]), 'the section changed');
-    assertEqual(session.recents.visibleIds(), [SPOTIFY]);
-    assertEqual(session.recents.openIds(), [], 'no longer an open app');
-    assertEqual(world.stored, [SPOTIFY], 'persisted');
+    // Nothing about the row changes — that is the whole point — so the
+    // model reports no change; the dot going out is DockManager's business.
+    assert(!session.recents.syncRunning([SPOTIFY, CALC]), 'the row is untouched');
+
+    assertEqual(session.slotOf(DISCORD), 1, 'same slot, now as a recent');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'and nothing else moved');
+    assertEqual(world.stored, [DISCORD], 'persisted');
 });
 
-test('each new quit pushes the older ones left', () => {
+test('quitting in any order leaves the row in launch order', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
 
-    session.quit(SPOTIFY);
-    assertEqual(session.recents.visibleIds(), [SPOTIFY], 'after quitting Spotify');
+    session.quit(CALC, SPOTIFY, DISCORD);
 
-    session.quit(DISCORD);
-    assertEqual(session.recents.visibleIds(), [SPOTIFY, DISCORD], 'after quitting Discord');
-
-    session.quit(CALC);
-    assertEqual(session.recents.visibleIds(), [SPOTIFY, DISCORD, CALC], 'after quitting Calculator');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'close order decides nothing');
+    assertEqual(world.stored, [SPOTIFY, DISCORD, CALC], 'stored the way it is drawn');
 });
 
 test('an app with more than one window is filed only when the last one goes', () => {
@@ -213,25 +224,29 @@ test('an app with more than one window is filed only when the last one goes', ()
     const session = new Session(world.started()).open(SPOTIFY);
 
     assert(!session.recents.syncRunning([SPOTIFY]), 'first window closed: no change');
-    assertEqual(session.recents.visibleIds(), []);
+    assertEqual(session.recents.ids, []);
 
     session.quit(SPOTIFY);
-    assertEqual(session.recents.visibleIds(), [SPOTIFY], 'last window closed: filed');
+    assertEqual(session.recents.ids, [SPOTIFY], 'last window closed: remembered');
 });
 
-test('a pinned app never enters the queue', () => {
+test('a pinned app never takes a slot in this row', () => {
     const world = new World({ pinned: [SPOTIFY] });
     const session = new Session(world.started()).open(SPOTIFY).quit(SPOTIFY);
 
-    assertEqual(session.recents.visibleIds(), [], 'nothing visible');
+    assertEqual(session.row, [], 'it belongs to the pinned section');
     assertEqual(session.recents.ids, [], 'no invisible entry either');
     assertEqual(world.writes, 0, 'and nothing written to storage');
 });
 
-test('an id with no stable .desktop entry is never stored', () => {
+test('an id with no stable .desktop entry keeps its slot only while it runs', () => {
     const world = new World();
-    const session = new Session(world.started()).open('window:12').quit('window:12');
+    const session = new Session(world.started()).open(SPOTIFY, 'window:12');
+    assertEqual(session.row, [SPOTIFY, 'window:12'], 'drawn like anything else');
 
+    session.quit('window:12');
+
+    assertEqual(session.row, [SPOTIFY], 'nothing to remember it by');
     assertEqual(session.recents.ids, []);
     assert(!isPersistentAppId('window:12'), 'synthetic ids are not persistent');
     assert(isPersistentAppId(SPOTIFY), 'desktop ids are');
@@ -250,31 +265,31 @@ test('reopening a recent leaves its icon exactly where it was', () => {
     session.open(DISCORD);
 
     assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'same row, same indices');
-    assertEqual(session.recents.openIds(), [], 'it keeps its slot rather than moving left');
+});
+
+test('quitting a reopened app does not refile it either', () => {
+    const world = new World();
+    const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
+    session.quit(SPOTIFY, DISCORD, CALC);
+
+    session.open(SPOTIFY).quit(SPOTIFY);
+
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'no jump to the trash end');
+    assertEqual(world.stored, [SPOTIFY, DISCORD, CALC], 'and no reshuffle on disk');
 });
 
 test('a reopened app is no longer removable as a recent', () => {
-    // DockManager offers "Remove from Dock" on the window entries that are
-    // not running; reopening one takes it out of that set.
+    // DockManager offers "Remove from Dock" on the row entries that are not
+    // running; reopening one takes it out of that set.
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY).quit(SPOTIFY);
     session.open(SPOTIFY);
 
-    const removable = session.recents.visibleIds().filter(id => !session.running.includes(id));
+    const removable = session.row.filter(id => !session.running.includes(id));
     assertEqual(removable, [], 'nothing to remove while it is open');
 });
 
-test('quitting a reopened app refiles it at the recent end', () => {
-    const world = new World();
-    const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
-    session.quit(SPOTIFY, DISCORD, CALC);   // row: SPOTIFY, DISCORD, CALC
-
-    session.open(SPOTIFY).quit(SPOTIFY);
-
-    assertEqual(session.row, [DISCORD, CALC, SPOTIFY], 'newest close is nearest the trash');
-});
-
-test('reopening does not duplicate an entry', () => {
+test('reopening does not duplicate a slot', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY).quit(SPOTIFY);
     session.open(SPOTIFY).quit(SPOTIFY).open(SPOTIFY).quit(SPOTIFY);
@@ -283,30 +298,78 @@ test('reopening does not duplicate an entry', () => {
     assertEqual(session.row, [SPOTIFY]);
 });
 
-test('an open app pushed out of the window falls back to the open zone', () => {
-    // Its slot is gone, but a running app has an icon no matter what.
+test('a running app keeps its icon however full the window gets', () => {
+    // Its slot is the oldest on the row, so the limit would drop it if it
+    // were closed — but a running app is never counted and never dropped.
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY).quit(SPOTIFY);
-    session.open(SPOTIFY);                              // holds slot 1 of 3
+    session.open(SPOTIFY);                  // holds the oldest slot, running
 
-    const others = [DISCORD, CALC, EDITOR];
-    new Session(session.recents, session.running).open(...others).quit(...others);
-    session.running = [SPOTIFY];
+    session.open(DISCORD, CALC, EDITOR).quit(DISCORD, CALC, EDITOR);
 
-    assertEqual(session.recents.visibleIds(), [DISCORD, CALC, EDITOR], 'three newer closes');
-    assertEqual(session.recents.openIds(), [SPOTIFY], 'still on the dock, in the open zone');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC, EDITOR],
+        'three recents plus the open one, all in place');
 });
 
 // -- the limit ------------------------------------------------------------
 
 print('limit');
 
-test('a fourth close pushes the oldest out of the visible three', () => {
+test('a fourth close drops the oldest slot, not the newest close', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC, EDITOR);
     session.quit(SPOTIFY, DISCORD, CALC, EDITOR);
 
-    assertEqual(session.recents.visibleIds(), [DISCORD, CALC, EDITOR], 'Spotify dropped out');
+    assertEqual(session.row, [DISCORD, CALC, EDITOR], 'Spotify held the oldest slot');
+});
+
+test('the queue is FIFO by slot age, not by close time', () => {
+    // Spotify is the most recently *used* app here and still goes first:
+    // its slot is the oldest, and a slot is what the limit counts. Keeping
+    // it would mean moving it, which is the one thing the row will not do.
+    const world = new World();
+    const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
+    session.quit(DISCORD, CALC);
+    session.quit(SPOTIFY);
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'three closed, all fit');
+
+    session.open(EDITOR).quit(EDITOR);
+
+    assertEqual(session.row, [DISCORD, CALC, EDITOR]);
+});
+
+test('reopening a recent does not summon an app that had aged out', () => {
+    // Five apps used and quit, so two of them have dropped off the left of
+    // a three-wide window and only live in the deeper memory. Reopening one
+    // of the three on show must not free a place in the count and let one
+    // of those two back in beside it: launching an app puts *that* app's
+    // icon on the dock and touches nothing else.
+    const world = new World();
+    const session = new Session(world.started())
+        .open(SPOTIFY, DISCORD, CALC, EDITOR, FILES)
+        .quit(SPOTIFY, DISCORD, CALC, EDITOR, FILES);
+    assertEqual(session.row, [CALC, EDITOR, FILES], 'the two oldest slots aged out');
+
+    session.open(FILES);
+
+    assertEqual(session.row, [CALC, EDITOR, FILES], 'same row, Files now running');
+});
+
+test('reopening an aged-out app brings back its own icon and no other', () => {
+    const world = new World();
+    const session = new Session(world.started())
+        .open(SPOTIFY, DISCORD, CALC, EDITOR, FILES)
+        .quit(SPOTIFY, DISCORD, CALC, EDITOR, FILES);
+
+    // Spotify is out of the window entirely; opening it must draw it in the
+    // slot it has always had, without dragging Discord along with it.
+    session.open(SPOTIFY);
+
+    assertEqual(session.row, [SPOTIFY, CALC, EDITOR, FILES]);
+
+    session.quit(SPOTIFY);
+
+    assertEqual(session.row, [CALC, EDITOR, FILES], 'and it goes back out alone');
 });
 
 test('the deeper memory is bounded too', () => {
@@ -328,15 +391,15 @@ test('raising the limit again shows what the deeper memory kept', () => {
 
     world.limit = 4;
 
-    assertEqual(session.recents.visibleIds(), [SPOTIFY, DISCORD, CALC, EDITOR]);
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC, EDITOR]);
 });
 
-test('a limit of zero shows nothing and records nothing', () => {
+test('a limit of zero shows no recents and records none', () => {
     const world = new World({ limit: 0 });
     const session = new Session(world.started()).open(SPOTIFY);
 
-    assert(!session.recents.syncRunning([]), 'no change');
-    assertEqual(session.recents.visibleIds(), []);
+    assert(session.recents.syncRunning([]), 'the icon went away');
+    assertEqual(session.row, []);
     assertEqual(session.recents.ids, [], 'history not written while the section is off');
 });
 
@@ -344,7 +407,20 @@ test('a limit of zero still leaves open apps on the dock', () => {
     const world = new World({ limit: 0 });
     const session = new Session(world.started()).open(SPOTIFY);
 
-    assertEqual(session.recents.openIds(), [SPOTIFY]);
+    assertEqual(session.row, [SPOTIFY]);
+});
+
+test('turning the section off does not erase the history it was showing', () => {
+    const world = new World();
+    const session = new Session(world.started()).open(SPOTIFY, DISCORD);
+    session.quit(SPOTIFY);
+
+    world.limit = 0;
+    session.quit(DISCORD);
+    world.limit = 3;
+
+    assertEqual(session.recents.ids, [SPOTIFY], 'what was remembered still is');
+    assertEqual(session.row, [SPOTIFY], 'Discord never earned a slot');
 });
 
 // -- removal --------------------------------------------------------------
@@ -359,7 +435,7 @@ test('forgetting an app drops it and leaves the slot empty', () => {
 
     session.recents.forget(CALC);
 
-    assertEqual(session.recents.visibleIds(), [DISCORD, EDITOR], 'gone, and no backfill');
+    assertEqual(session.row, [DISCORD, EDITOR], 'gone, and no backfill');
     assertEqual(session.recents.suppressedSlots, 1, 'one slot stays empty');
 });
 
@@ -368,11 +444,11 @@ test('closing another app reclaims a suppressed slot', () => {
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
     session.quit(SPOTIFY, DISCORD, CALC);
     session.recents.forget(DISCORD);
-    assertEqual(session.recents.visibleIds().length, 2, 'suppressed down to two');
+    assertEqual(session.row.length, 2, 'suppressed down to two');
 
     session.open(EDITOR).quit(EDITOR);
 
-    assertEqual(session.recents.visibleIds(), [SPOTIFY, CALC, EDITOR], 'back to three');
+    assertEqual(session.row, [SPOTIFY, CALC, EDITOR], 'back to three');
     assertEqual(session.recents.suppressedSlots, 0);
 });
 
@@ -383,11 +459,10 @@ test('forgetting something that is not shown costs no slot', () => {
     session.recents.forget(DISCORD);
 
     assertEqual(session.recents.suppressedSlots, 0, 'no unrelated recent blanked');
-    assertEqual(session.recents.visibleIds(), [SPOTIFY]);
+    assertEqual(session.row, [SPOTIFY]);
 });
 
-test('forgetting an app that is running costs no slot either', () => {
-    // Its icon stays put — it is open — so nothing was emptied to hold open.
+test('forgetting a running app takes the memory, not the icon or the slot', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD);
     session.quit(SPOTIFY, DISCORD);
@@ -395,8 +470,9 @@ test('forgetting an app that is running costs no slot either', () => {
 
     session.recents.forget(SPOTIFY);
 
-    assertEqual(session.recents.suppressedSlots, 0, 'no slot claimed');
-    assertEqual(session.row, [SPOTIFY, DISCORD], 'still on the dock, now in the open zone');
+    assertEqual(session.recents.suppressedSlots, 0, 'no slot claimed: nothing was emptied');
+    assertEqual(session.row, [SPOTIFY, DISCORD], 'still on the dock, still in place');
+    assertEqual(session.recents.ids, [DISCORD], 'but no longer remembered');
 });
 
 test('clearing wipes the history and the suppressed slots with it', () => {
@@ -408,8 +484,18 @@ test('clearing wipes the history and the suppressed slots with it', () => {
     session.recents.clear();
 
     assertEqual(session.recents.ids, []);
-    assertEqual(session.recents.visibleIds(), []);
+    assertEqual(session.row, []);
     assertEqual(session.recents.suppressedSlots, 0, 'a cleared list is not also a suppressed one');
+});
+
+test('clearing leaves the apps that are still open alone', () => {
+    const world = new World();
+    const session = new Session(world.started()).open(SPOTIFY, DISCORD);
+    session.quit(SPOTIFY);
+
+    session.recents.clear();
+
+    assertEqual(session.row, [DISCORD], 'an open app is not history');
 });
 
 test('an uninstalled app is skipped rather than shown', () => {
@@ -418,7 +504,7 @@ test('an uninstalled app is skipped rather than shown', () => {
     session.quit(SPOTIFY, DISCORD);
     world.uninstalled.add(DISCORD);
 
-    assertEqual(session.recents.visibleIds(), [SPOTIFY]);
+    assertEqual(session.row, [SPOTIFY]);
 });
 
 // -- pinning and unpinning ------------------------------------------------
@@ -431,9 +517,9 @@ test('pinning a recent app removes it from the history immediately', () => {
     session.quit(SPOTIFY, DISCORD);
 
     world.pinned.add(SPOTIFY);
-    assert(session.recents.dropPinned(), 'the queue changed');
+    assert(session.recents.dropPinned(), 'the row changed');
 
-    assertEqual(session.recents.visibleIds(), [DISCORD], 'not shown');
+    assertEqual(session.row, [DISCORD], 'not shown');
     assertEqual(session.recents.ids, [DISCORD], 'and no invisible leftover entry');
 });
 
@@ -456,10 +542,10 @@ test('unpinning does not put an app back into recents on its own', () => {
 
     world.pinned.delete(SPOTIFY);
 
-    assertEqual(session.recents.visibleIds(), [DISCORD], 'Spotify stays off until it is used');
+    assertEqual(session.row, [DISCORD], 'Spotify stays off until it is used');
 });
 
-test('an unpinned app earns its place back by being opened and quit', () => {
+test('an unpinned app earns a fresh slot at the end by being opened', () => {
     const world = new World({ pinned: [SPOTIFY] });
     const session = new Session(world.started()).open(SPOTIFY, DISCORD);
     session.quit(SPOTIFY, DISCORD);
@@ -468,7 +554,18 @@ test('an unpinned app earns its place back by being opened and quit', () => {
 
     session.open(SPOTIFY).quit(SPOTIFY);
 
-    assertEqual(session.recents.visibleIds(), [DISCORD, SPOTIFY]);
+    assertEqual(session.row, [DISCORD, SPOTIFY]);
+});
+
+test('an app unpinned while it is running is adopted rather than left iconless', () => {
+    const world = new World({ pinned: [SPOTIFY] });
+    const session = new Session(world.started()).open(DISCORD, SPOTIFY);
+    assertEqual(session.row, [DISCORD], 'pinned apps are drawn elsewhere');
+
+    world.pinned.delete(SPOTIFY);
+    session.recents.syncRunning([...session.running]);
+
+    assertEqual(session.row, [DISCORD, SPOTIFY], 'it takes the next slot');
 });
 
 test('a pinned app is filtered even if an old queue still names it', () => {
@@ -476,24 +573,22 @@ test('a pinned app is filtered even if an old queue still names it', () => {
     const recents = world.started();
 
     assertEqual(recents.visibleIds(), [DISCORD]);
-    assertEqual(recents.openIds(), [], 'and not smuggled in through the open zone');
 });
 
 // -- restart --------------------------------------------------------------
 
 print('restart');
 
-test('disable/enable preserves the list, its order and its limit', () => {
+test('disable/enable preserves the row, its order and its limit', () => {
     const world = new World();
     const first = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
     first.quit(SPOTIFY, DISCORD);
-    const before = first.recents.visibleIds();
+    const before = first.row;
 
     // A fresh manager over the same GSettings, with Calculator still up.
     const second = world.started({ running: [CALC] });
 
-    assertEqual(second.visibleIds(), before, 'same section, same order');
-    assertEqual(second.openIds(), [CALC], 'and the open app is still open');
+    assertEqual(second.visibleIds(), before, 'same row, same order');
 });
 
 test('apps already running at enable time are not read as launches or quits', () => {
@@ -502,15 +597,15 @@ test('apps already running at enable time are not read as launches or quits', ()
 
     assert(!recents.syncRunning([CALC, EDITOR]), 'nothing filed');
     assertEqual(recents.ids, [SPOTIFY, DISCORD], 'restored order untouched');
-    assertEqual(recents.visibleIds(), [DISCORD, SPOTIFY], 'oldest first, left to right');
+    assertEqual(recents.visibleIds(), [SPOTIFY, DISCORD, CALC, EDITOR],
+        'recents first, then what is up, left to right');
 });
 
 test('an app running at enable time keeps the slot it was restored with', () => {
     const world = new World({ stored: [SPOTIFY, DISCORD] });
-    const recents = world.started({ running: [DISCORD] });
+    const recents = world.started({ running: [SPOTIFY] });
 
-    assertEqual(recents.visibleIds(), [DISCORD, SPOTIFY], 'drawn in place, with a dot');
-    assertEqual(recents.openIds(), [], 'not duplicated into the open zone');
+    assertEqual(recents.visibleIds(), [SPOTIFY, DISCORD], 'drawn in place, with a dot');
 });
 
 test('load() repairs duplicates and unstable ids left by an older version', () => {
@@ -534,9 +629,8 @@ test('load() clamps a suppressed count that outgrew its range', () => {
 print('migration');
 
 test('a suppressed count from the old rule is dropped, not carried over', () => {
-    // Exactly the state the refactor left on disk: three slots charged by
-    // the old forget(), which is enough to blank a three-slot section even
-    // though six apps are remembered.
+    // Format 0 state: five apps remembered newest-first, three slots
+    // charged by the old forget() — enough to blank a three-slot section.
     const world = new World({
         stored: [SPOTIFY, DISCORD, CALC, EDITOR, FILES], suppressed: 3, format: 0,
     });
@@ -544,9 +638,20 @@ test('a suppressed count from the old rule is dropped, not carried over', () => 
 
     assertEqual(recents.suppressedSlots, 0, 'the inflated count is gone');
     assertEqual(recents.visibleIds(), [CALC, DISCORD, SPOTIFY],
-        'and the section fills again');
+        'and the section fills again, looking as it did');
     assertEqual(world.suppressed, 0, 'the reset reached storage');
     assertEqual(world.format, RECENTS_FORMAT, 'and was recorded as done');
+});
+
+test('a newest-first list is reversed, so the row survives the upgrade', () => {
+    // Under format 1 the list was stored newest-first and reversed for
+    // display: [SPOTIFY, DISCORD, CALC] was drawn CALC, DISCORD, SPOTIFY.
+    const world = new World({ stored: [SPOTIFY, DISCORD, CALC], format: 1 });
+    const recents = world.started();
+
+    assertEqual(recents.visibleIds(), [CALC, DISCORD, SPOTIFY], 'the same row as before');
+    assertEqual(world.stored, [CALC, DISCORD, SPOTIFY], 'now stored the way it is drawn');
+    assertEqual(world.format, RECENTS_FORMAT);
 });
 
 test('the migration runs once, not on every startup', () => {
@@ -557,7 +662,7 @@ test('the migration runs once, not on every startup', () => {
     // A gap the user makes *after* migrating has to survive a restart —
     // which is the entire reason the count is persisted.
     const second = world.started();
-    second.forget(DISCORD);
+    second.forget(SPOTIFY);
     assertEqual(second.suppressedSlots, 1, 'a fresh removal charges a slot');
 
     const third = world.started();
@@ -570,7 +675,7 @@ test('state already in the current format is left alone', () => {
 
     assertEqual(recents.suppressedSlots, 1, 'an honest count is untouched');
     // Three remembered, three slots, one held empty: the oldest stays off.
-    assertEqual(recents.visibleIds(), [DISCORD, SPOTIFY], 'and its gap still holds');
+    assertEqual(recents.visibleIds(), [DISCORD, CALC], 'and its gap still holds');
 });
 
 // -- result ---------------------------------------------------------------

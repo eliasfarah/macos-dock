@@ -1447,17 +1447,22 @@ export class DockManager {
         this._recents.seedRunning(this._runningAppIds());
     }
 
-    /** Running apps that have a real desktop entry behind them. */
+    /**
+     * Every running app, including the ones the shell could not match to a
+     * desktop entry. Those have no id worth storing (see isPersistentAppId)
+     * and the model never persists them, but they do need a slot while they
+     * are open — and a slot from the model is a slot that stays put, which
+     * a fallback appended at redisplay time would not be.
+     */
     _runningAppIds() {
-        return this._appSystem.get_running()
-            .filter(app => app.get_app_info())
-            .map(app => app.get_id());
+        return this._appSystem.get_running().map(app => app.get_id());
     }
 
     /**
      * Folds "what is running now" into the recents queue. Called at the top
      * of every redisplay, which is where launches and quits both surface
-     * (via 'app-state-changed'); the model files the quits.
+     * (via 'app-state-changed'): the model seats the launches at the end of
+     * the row and lets the quits keep the seats they already have.
      */
     _recordRecentApps() {
         this._recents.syncRunning(this._runningAppIds());
@@ -1474,10 +1479,11 @@ export class DockManager {
     }
 
     _redisplayApps() {
-        // Favorites first (in their configured order), then running-but-
-        // unfavorited apps appended — and existing icons are repositioned
-        // rather than rebuilt, so apps already on the dock never visibly
-        // jump around when an unrelated app launches or quits.
+        // Favorites first (in their configured order), then the open and
+        // recent apps in the order the model seated them — and existing
+        // icons are repositioned rather than rebuilt, so apps already on the
+        // dock never visibly jump around when an unrelated app launches or
+        // quits.
         this._recordRecentApps();
 
         const favoriteApps = this._favorites.getFavorites();
@@ -1486,15 +1492,14 @@ export class DockManager {
             .filter(app => !favoriteIds.has(app.get_id()));
         const runningById = new Map(runningApps.map(app => [app.get_id(), app]));
 
-        // What the persisted queue says this section is, independently of
-        // the current session — see RecentApps.visibleIds(). A slot in here
-        // belongs to an app whether or not it is running, which is what
-        // holds a reopened app's icon still instead of migrating it.
+        // The whole trailing row in one list, running apps and recents
+        // alike, in the order the model assigned their slots — see
+        // RecentApps.visibleIds(). Nothing here is sorted by state: an app
+        // stays exactly where it arrived whether it is open, quit or
+        // reopened, which is the only way an icon never moves under the
+        // cursor.
         const windowIds = this._recents.visibleIds();
 
-        // Open apps first, then the recents window: the queue's recent end
-        // is drawn last so the app you just quit sits nearest the folders
-        // and the trash, with the older ones pushed left of it.
         const trailingApps = [];
         const seenTrailingIds = new Set();
         const pushTrailing = (id, app) => {
@@ -1504,22 +1509,14 @@ export class DockManager {
             seenTrailingIds.add(id);
         };
 
-        for (const id of this._recents.openIds())
-            pushTrailing(id, runningById.get(id));
-        // Running apps the queue does not track: a window the shell cannot
-        // match to a .desktop entry has no id worth storing (see
-        // isPersistentAppId) but still needs an icon while it is open. Apps
-        // holding a slot below are skipped rather than picked up here —
-        // reaching them first would put a reopened app back in the open
-        // zone, which is the jump this ordering exists to prevent.
-        const seatedIds = new Set(windowIds);
-        for (const app of runningApps) {
-            if (!seatedIds.has(app.get_id()))
-                pushTrailing(app.get_id(), app);
-        }
-
         for (const id of windowIds)
             pushTrailing(id, runningById.get(id) ?? this._appSystem.lookup_app(id));
+
+        // A running app the model has no slot for at all should not exist,
+        // but an icon is the one thing a running app must never lack, so
+        // any straggler is appended rather than dropped.
+        for (const app of runningApps)
+            pushTrailing(app.get_id(), app);
 
         const wantedIds = new Set([...favoriteIds, ...trailingApps.map(app => app.get_id())]);
         for (const [appId, icon] of this._appIcons) {
