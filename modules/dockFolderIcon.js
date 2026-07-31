@@ -41,6 +41,24 @@ const PREVIEW_LAYERS = [
 // refresh is a full async directory enumeration — coalesce them.
 const REFRESH_DEBOUNCE_MS = 250;
 
+// How long to wait before retrying a directory monitor that failed to
+// attach (folder briefly unreadable/unmounted at login, GVFS hiccup).
+// Without a retry the pile silently stops live-updating for the rest of
+// the icon's life — every future save into that folder would be invisible
+// until the extension or session restarts.
+const MONITOR_RETRY_MS = 5000;
+
+// Backstop poll, independent of the file monitor above. Gio.FileMonitor's
+// 'changed' signal is inotify underneath, and inotify does not see writes
+// that happen through a different mount namespace than the one this
+// process watches from — a sandboxed browser or image editor (Flatpak,
+// snap) writing through its own FUSE/portal view of the folder is exactly
+// that case, and it is common enough that the pile cannot depend on the
+// monitor alone to ever catch a save. Polling every few seconds guarantees
+// the preview catches up on its own even when no 'changed' event ever
+// fires for the write that caused it.
+const FALLBACK_REFRESH_MS = 3000;
+
 // How often the in-flight download is re-measured while one is running.
 // Fast enough to look live, slow enough that a folder being written to
 // continuously doesn't cost a stat per frame.
@@ -75,6 +93,8 @@ class DockFolderIcon extends St.Button {
         this._iconSize = iconSize;
         this._entries = [];
         this._refreshId = 0;
+        this._monitorRetryId = 0;
+        this._fallbackRefreshId = 0;
 
         // Required for DND.makeDraggable's "does this actor have a
         // custom drag actor" check (`this.actor._delegate.getDragActor`,
@@ -136,6 +156,10 @@ class DockFolderIcon extends St.Button {
 
         this._watchFolder();
         this._refresh();
+        this._fallbackRefreshId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FALLBACK_REFRESH_MS, () => {
+            this._refresh();
+            return GLib.SOURCE_CONTINUE;
+        });
 
         this.connect('destroy', () => {
             // Set FIRST. Everything below is synchronous, but the progress
@@ -150,6 +174,10 @@ class DockFolderIcon extends St.Button {
             this._progressCancellable = null;
             this._stopWatching();
             this._cancelPendingRefresh();
+            if (this._fallbackRefreshId) {
+                GLib.Source.remove(this._fallbackRefreshId);
+                this._fallbackRefreshId = 0;
+            }
             this._stopSweep();
             this._stopProgress();
         });
@@ -214,14 +242,30 @@ class DockFolderIcon extends St.Button {
                 .monitor_directory(Gio.FileMonitorFlags.NONE, null);
             this._monitor.connect('changed', () => this._scheduleRefresh());
         } catch (error) {
-            // Unreadable or gone — the fallback folder icon still shows.
+            // Unreadable or gone right now — retry rather than leaving this
+            // stack without live updates for the rest of its life (icons
+            // are reused across redisplays, see DockManager's icon Map, so
+            // there is no later construction that would get another try).
+            // The fallback folder icon still shows meanwhile, and a refresh
+            // right after a successful retry picks up anything missed.
             this._monitor = null;
+            this._monitorRetryId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT, MONITOR_RETRY_MS, () => {
+                    this._monitorRetryId = 0;
+                    this._watchFolder();
+                    this._refresh();
+                    return GLib.SOURCE_REMOVE;
+                });
         }
     }
 
     _stopWatching() {
         this._monitor?.cancel();
         this._monitor = null;
+        if (this._monitorRetryId) {
+            GLib.Source.remove(this._monitorRetryId);
+            this._monitorRetryId = 0;
+        }
     }
 
     // -- drawing -------------------------------------------------------
