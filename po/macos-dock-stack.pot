@@ -6,9 +6,9 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: macOS Dock Stack 1.4.0\n"
-"Report-Msgid-Bugs-To: eliasfa@gmail.com\n"
-"POT-Creation-Date: 2026-07-28 14:43-0300\n"
+"Project-Id-Version: macOS Dock Stack\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-31 06:14-0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -264,22 +264,26 @@ msgstr ""
 msgid "Select folder for the stack"
 msgstr ""
 
-#: modules/dockAppIcon.js:90
+#: modules/dockAppIcon.js:89
 msgid "Remove from Dock"
 msgstr ""
 
-#: modules/dockManager.js:319
+#: modules/dockManager.js:326
 msgid "Applications"
 msgstr ""
 
-#: modules/dockManager.js:320
+#: modules/dockManager.js:327
 msgid "Trash"
 msgstr ""
 
-#: modules/dockManager.js:715
+#: modules/dockManager.js:722
+msgid "Clear Recent Apps"
+msgstr ""
+
+#: modules/dockManager.js:723
 msgid "Dock Preferences…"
 msgstr ""
 
-#: modules/stack.js:896
+#: modules/stack.js:873
 msgid "Open in Files"
 msgstr ""

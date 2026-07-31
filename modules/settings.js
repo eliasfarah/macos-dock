@@ -7,6 +7,8 @@
  * (de)serialized here.
  */
 
+import { RECENTS_FORMAT } from './recentApps.js';
+
 const STACKS_KEY = 'stacks';
 
 // Keys the extension writes itself but that an older *compiled* schema may
@@ -16,6 +18,7 @@ const STACKS_KEY = 'stacks';
 // shell down instead of merely losing one stored value. Every access to
 // such a key goes through _hasKey() first.
 const SUPPRESSED_KEY = 'recent-apps-suppressed';
+const RECENTS_FORMAT_KEY = 'recent-apps-format';
 
 export class StackSettings {
     constructor(gioSettings) {
@@ -61,6 +64,20 @@ export class StackSettings {
     set recentAppsSuppressed(count) {
         if (this._hasKey(SUPPRESSED_KEY))
             this._gsettings.set_int(SUPPRESSED_KEY, count);
+    }
+
+    // Which migration of the recents state has already run. Reports the
+    // current version on a schema too old to have the key, so an
+    // installation that cannot record "done" does not re-migrate — and
+    // therefore re-clear the user's suppressed slots — on every startup.
+    get recentAppsFormat() {
+        return this._hasKey(RECENTS_FORMAT_KEY)
+            ? this._gsettings.get_int(RECENTS_FORMAT_KEY) : RECENTS_FORMAT;
+    }
+
+    set recentAppsFormat(version) {
+        if (this._hasKey(RECENTS_FORMAT_KEY))
+            this._gsettings.set_int(RECENTS_FORMAT_KEY, version);
     }
 
     getStacks() {

@@ -6,8 +6,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: macOS Dock Stack 1.4.0\n"
-"Report-Msgid-Bugs-To: eliasfa@gmail.com\n"
-"POT-Creation-Date: 2026-07-28 14:43-0300\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-31 06:14-0300\n"
 "PO-Revision-Date: 2026-07-28 14:43-0300\n"
 "Last-Translator: eliasfarah <eliasfa@gmail.com>\n"
 "Language-Team: Portuguese (Brazil)\n"
@@ -21,7 +21,9 @@ msgstr ""
 msgid ""
 "Dash to Dock has been disabled — macOS Dock Stack takes over as the "
 "persistent dock."
-msgstr "Dash to Dock foi desativado — o macOS Dock Stack assume como dock persistente."
+msgstr ""
+"Dash to Dock foi desativado — o macOS Dock Stack assume como dock "
+"persistente."
 
 #: prefs.js:25
 msgid "Follow system"
@@ -91,7 +93,9 @@ msgstr "Tamanho dos ícones"
 msgid ""
 "Maximum size, in pixels: the dock shrinks icons on its own if they don't fit "
 "the screen"
-msgstr "Tamanho máximo, em pixels: a dock reduz os ícones sozinha se não couberem na tela"
+msgstr ""
+"Tamanho máximo, em pixels: a dock reduz os ícones sozinha se não couberem na "
+"tela"
 
 #: prefs.js:79
 msgid "Screen edge margin"
@@ -109,7 +113,9 @@ msgstr "Margem entre a dock e as janelas"
 msgid ""
 "Space reserved above the dock: pushes maximized windows up without moving "
 "the dock"
-msgstr "Espaço reservado acima da dock: empurra as janelas maximizadas para cima sem mover a dock"
+msgstr ""
+"Espaço reservado acima da dock: empurra as janelas maximizadas para cima sem "
+"mover a dock"
 
 #: prefs.js:89
 msgid "Recent apps"
@@ -117,7 +123,8 @@ msgstr "Apps recentes"
 
 #: prefs.js:90
 msgid "How many unpinned apps stay on the dock after closing (0 disables)"
-msgstr "Quantos apps não fixados continuam na dock depois de fechados (0 desativa)"
+msgstr ""
+"Quantos apps não fixados continuam na dock depois de fechados (0 desativa)"
 
 #: prefs.js:94
 msgid "Auto-hide"
@@ -127,7 +134,8 @@ msgstr "Ocultar automaticamente"
 msgid ""
 "The dock reserves no screen space and reveals itself when the cursor nears "
 "the edge"
-msgstr "A dock não reserva espaço de tela e se revela ao aproximar o cursor da borda"
+msgstr ""
+"A dock não reserva espaço de tela e se revela ao aproximar o cursor da borda"
 
 #: prefs.js:98
 msgid "Magnification"
@@ -184,7 +192,8 @@ msgstr "Overshoot da mola"
 #: prefs.js:140
 msgid ""
 "Slightly overshoots the final value before settling (~3%), like on macOS"
-msgstr "Ultrapassa levemente o valor final antes de assentar (~3%), como no macOS"
+msgstr ""
+"Ultrapassa levemente o valor final antes de assentar (~3%), como no macOS"
 
 #: prefs.js:143
 msgid "Delay between items"
@@ -238,7 +247,9 @@ msgstr "Pastas configuradas"
 msgid ""
 "Each folder below appears as a dock icon; clicking it expands the stack from "
 "the icon itself."
-msgstr "Cada pasta abaixo aparece como um ícone na dock; clicar nele expande o stack a partir do próprio ícone."
+msgstr ""
+"Cada pasta abaixo aparece como um ícone na dock; clicar nele expande o stack "
+"a partir do próprio ícone."
 
 #: prefs.js:231
 msgid "Add folder"
@@ -264,22 +275,26 @@ msgstr "Remover"
 msgid "Select folder for the stack"
 msgstr "Selecionar pasta para o stack"
 
-#: modules/dockAppIcon.js:90
+#: modules/dockAppIcon.js:89
 msgid "Remove from Dock"
 msgstr "Remover da Dock"
 
-#: modules/dockManager.js:319
+#: modules/dockManager.js:326
 msgid "Applications"
 msgstr "Aplicativos"
 
-#: modules/dockManager.js:320
+#: modules/dockManager.js:327
 msgid "Trash"
 msgstr "Lixeira"
 
-#: modules/dockManager.js:715
+#: modules/dockManager.js:722
+msgid "Clear Recent Apps"
+msgstr "Limpar apps recentes"
+
+#: modules/dockManager.js:723
 msgid "Dock Preferences…"
 msgstr "Preferências da Dock…"
 
-#: modules/stack.js:896
+#: modules/stack.js:873
 msgid "Open in Files"
 msgstr "Abrir no Gerenciador de Arquivos"

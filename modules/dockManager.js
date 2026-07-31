@@ -37,6 +37,7 @@ import { DockFolderIcon } from './dockFolderIcon.js';
 import { createDockSeparator, sizeDockSeparator, SEPARATOR_TOTAL_WIDTH } from './dockSeparator.js';
 import { DockTrashIcon } from './dockTrashIcon.js';
 import { DockShowAppsIcon } from './dockShowAppsIcon.js';
+import { RecentApps } from './recentApps.js';
 
 const DOCK_MIN_WIDTH = 120;
 
@@ -87,13 +88,6 @@ const MAGNIFY_PIXEL_EPSILON = 0.05;  // ...and for translation/width, in px
 // already "settled" — would stop and restart the ticker on every single
 // mouse report, which is most of the churn this design exists to avoid.
 const MAGNIFY_IDLE_FRAMES = 30;
-// How many app ids the recents queue remembers on disk, independently of
-// how many the preference currently displays — see _recordRecentApps().
-const RECENT_APPS_MEMORY = 12;
-// Ceiling for the suppressed-slot counter, matching the `dock-recent-apps`
-// schema range: suppressing more slots than the section can ever show would
-// only mean "the section stays empty forever".
-const RECENT_APPS_MAX_SUPPRESSED = 6;
 // Shortest gap between two geometry repairs, in microseconds — see
 // _verifyDockGeometry().
 const GEOMETRY_FIX_COOLDOWN = 250000;
@@ -125,19 +119,32 @@ export class DockManager {
         this._appIcons = new Map(); // appId -> DockAppIcon
         this._stackIcons = new Map(); // stack id -> DockFolderIcon
         this._redisplayIdle = 0;
-        // How many closed-recent slots "Remove from Dock" has suppressed —
-        // see _forgetRecentApp() and _recentWindowIds(). Persisted, so a
-        // gap the user made survives a reboot; the real value is loaded in
-        // _loadRecentAppsState().
-        this._forgottenRecentSlots = 0;
-        // App ids that were already running at the previous redisplay. The
-        // difference against the current set is what counts as a launch —
-        // see _recordRecentApps().
-        this._runningAppIds = new Set();
         this._overviewHiddenId = 0;
 
         this._appSystem = Shell.AppSystem.get_default();
         this._favorites = AppFavorites.getAppFavorites();
+
+        // The recents queue's whole state and ordering policy (see
+        // modules/recentApps.js). This class keeps only the icons; the four
+        // ports below are the entire surface between them, which is what
+        // lets the ordering rules be tested without a compositor.
+        this._recents = new RecentApps({
+            storage: {
+                getIds: () => this._settings.getRecentApps(),
+                setIds: ids => this._settings.setRecentApps(ids),
+                getSuppressed: () => this._settings.recentAppsSuppressed,
+                setSuppressed: count => {
+                    this._settings.recentAppsSuppressed = count;
+                },
+                getFormat: () => this._settings.recentAppsFormat,
+                setFormat: version => {
+                    this._settings.recentAppsFormat = version;
+                },
+            },
+            isPinned: id => this._favorites.isFavorite(id),
+            appExists: id => this._appSystem.lookup_app(id) !== null,
+            limit: () => this._settings.dockRecentApps,
+        });
 
         this._objectSignals = []; // { object, id }
         this._monitorsChangedId = 0;
@@ -706,6 +713,13 @@ export class DockManager {
     _buildContextMenu() {
         this._contextMenuManager = new PopupMenu.PopupMenuManager(this._dockActor);
         this._contextMenu = new PopupMenu.PopupMenu(this._dockActor, 0.5, St.Side.BOTTOM);
+        // Wiping the recents history needed *some* entry point: "Remove
+        // from Dock" only ever drops one app, and clearing the lot by
+        // right-clicking each icon in turn is not a gesture anyone would
+        // find. Hidden while there is nothing to clear, so the menu stays a
+        // single item on a dock that has no recents.
+        this._clearRecentsItem = this._contextMenu.addAction(
+            _('Clear Recent Apps'), () => this._clearRecentApps());
         this._contextMenu.addAction(_('Dock Preferences…'), () => this._onOpenPreferences?.());
         Main.uiGroup.add_child(this._contextMenu.actor);
         this._contextMenu.actor.hide();
@@ -722,6 +736,8 @@ export class DockManager {
             // is for the dock's own empty chrome only.
             if (this._isOnIcon(event.get_source()))
                 return Clutter.EVENT_PROPAGATE;
+            if (this._clearRecentsItem)
+                this._clearRecentsItem.visible = this._recents.ids.length > 0;
             this._contextMenu.toggle();
             return Clutter.EVENT_STOP;
         });
@@ -1218,9 +1234,15 @@ export class DockManager {
     // -- live updates ------------------------------------------------------
 
     _connectSignals() {
+        // Every one of these goes into _objectSignals, which
+        // _disconnectSignals() empties on disable(): a handler that outlives
+        // the manager would keep a destroyed dock alive and, on the next
+        // enable(), run twice per event.
         this._objectSignals.push(
-            { object: this._favorites, id: this._favorites.connect('changed', () => this._queueRedisplay()) },
+            { object: this._favorites, id: this._favorites.connect('changed', () => this._onFavoritesChanged()) },
             { object: this._appSystem, id: this._appSystem.connect('installed-changed', () => this._queueRedisplay()) },
+            // Launches and quits both surface here, and quits are what fill
+            // the recents queue — see _recordRecentApps().
             { object: this._appSystem, id: this._appSystem.connect('app-state-changed', () => this._queueRedisplay()) },
         );
         this._settingsChangedId = this._settings.connectChanged((_s, key) => this._onSettingChanged(key));
@@ -1396,7 +1418,16 @@ export class DockManager {
     }
 
     _redisplay() {
-        if (!this._appsBox)
+        // `_chromeGone`, not just a null check: at logout the shell destroys
+        // its chrome from C before disable() ever runs, which leaves every
+        // JS reference here non-null but pointing at a disposed actor. A
+        // redisplay already queued at that moment then walked the whole row
+        // calling set_child_at_index() on it — about twenty
+        // `Gjs-CRITICAL: has been already disposed` lines per logout, plus a
+        // `clutter_actor_set_child_at_index: assertion 'child->priv->parent
+        // == self' failed`. _layoutDock() has guarded against exactly this
+        // since the 'workareas-changed' round; the redisplay path never did.
+        if (!this._appsBox || this._chromeGone || this._tearingDown)
             return;
 
         this._redisplayApps();
@@ -1406,158 +1437,40 @@ export class DockManager {
     }
 
     /**
-     * Whether an app id is worth writing to disk.
-     *
-     * A window the shell cannot match to a desktop entry still gets a
-     * ShellApp, but with a synthetic id of the form `window:<n>` built from
-     * the window's stable sequence number — a per-session counter. Storing
-     * one is worse than useless: after the next boot that id resolves to
-     * nothing, the same program comes back under a *different* synthetic
-     * id, and _recordRecentApps() files it as a brand-new recent that
-     * pushes the genuine entries one place further down the queue until
-     * they fall off the end of it — the recents section visibly reshuffling
-     * across a reboot even though nothing about it should have changed.
-     */
-    _isPersistentAppId(id) {
-        return typeof id === 'string' && id.endsWith('.desktop');
-    }
-
-    /** The stored queue with everything unusable filtered out. */
-    _sanitisedRecentIds() {
-        return this._settings.getRecentApps().filter(id => this._isPersistentAppId(id));
-    }
-
-    /**
-     * Session-start state for the recents queue.
-     *
-     * Apps that are already running when the extension is enabled are
-     * seeded into `_runningAppIds` so the first redisplay does not read
-     * them as launches. Without that, every app restored at login would be
-     * promoted to the front of the queue in whatever order
-     * Shell.AppSystem.get_running() happened to return them — reordering
-     * the very section this is trying to keep stable.
-     *
-     * The stored queue is also repaired here rather than left to age out,
-     * so ids that cannot survive a reboot stop occupying slots in the
-     * twelve-deep memory immediately.
+     * Session-start state for the recents queue: repair what was stored,
+     * then tell the model what is already running so the first redisplay
+     * does not read a restored session as a burst of launches — or, worse,
+     * the redisplay after a disable/enable as everything quitting at once.
      */
     _loadRecentAppsState() {
-        this._forgottenRecentSlots = clamp(
-            this._settings.recentAppsSuppressed, 0, RECENT_APPS_MAX_SUPPRESSED);
-
-        this._runningAppIds = new Set(this._appSystem.get_running()
-            .filter(app => app.get_app_info())
-            .map(app => app.get_id()));
-
-        const stored = this._settings.getRecentApps();
-        const cleaned = stored.filter(id => this._isPersistentAppId(id));
-        if (cleaned.length !== stored.length)
-            this._settings.setRecentApps(cleaned);
+        this._recents.load();
+        this._recents.seedRunning(this._runningAppIds());
     }
 
-    _setForgottenRecentSlots(count) {
-        const next = clamp(Math.round(count), 0, RECENT_APPS_MAX_SUPPRESSED);
-        if (next === this._forgottenRecentSlots)
-            return;
-        this._forgottenRecentSlots = next;
-        this._settings.recentAppsSuppressed = next;
+    /** Running apps that have a real desktop entry behind them. */
+    _runningAppIds() {
+        return this._appSystem.get_running()
+            .filter(app => app.get_app_info())
+            .map(app => app.get_id());
     }
 
     /**
-     * The "recently opened" section macOS keeps to the right of the
-     * pinned apps: an app you launched but never pinned stays on the Dock
-     * after you quit it, and the three most recent ones are kept.
-     *
-     * The list is a most-recently-used queue of app ids, persisted through
-     * GSettings so it survives a logout the way the Dock's does. Pinned
-     * apps are never recorded: they have their own section, and letting
-     * them into this one would duplicate them.
-     *
-     * Only a genuine launch — an app that was not running at the previous
-     * redisplay — can touch the queue, and even then only if the app is
-     * not already inside the visible window (see _recentWindowIds). So
-     * re-focusing, quitting, or relaunching something the dock is already
-     * showing leaves the order completely alone; but launching an app the
-     * dock is *not* showing pulls it to the front, so the icon it gains is
-     * one the queue can reproduce after a reboot instead of one that
-     * exists only for as long as the process does.
+     * Folds "what is running now" into the recents queue. Called at the top
+     * of every redisplay, which is where launches and quits both surface
+     * (via 'app-state-changed'); the model files the quits.
      */
     _recordRecentApps() {
-        // Tracked before the early return below, so raising the preference
-        // from 0 later does not make every already-open app look freshly
-        // launched.
-        const runningApps = this._appSystem.get_running().filter(app => app.get_app_info());
-        const runningIds = runningApps.map(app => app.get_id());
-        const launched = runningIds.filter(id => !this._runningAppIds.has(id));
-        this._runningAppIds = new Set(runningIds);
-
-        if (this._settings.dockRecentApps === 0 || launched.length === 0)
-            return;
-
-        const favouriteIds = new Set(this._favorites.getFavorites().map(app => app.get_id()));
-        const stored = this._sanitisedRecentIds();
-        const shown = new Set(this._recentWindowIds(stored, favouriteIds));
-
-        const promote = launched.filter(id => !favouriteIds.has(id) && !shown.has(id));
-        if (promote.length === 0)
-            return;
-
-        // Opening an app is the only thing allowed to reclaim a slot that
-        // "Remove from Dock" suppressed — see _forgetRecentApp().
-        this._setForgottenRecentSlots(this._forgottenRecentSlots - promote.length);
-
-        // Trimmed generously rather than to the exact preference: lowering
-        // the preference should not permanently forget apps that raising it
-        // again would have shown.
-        const promoted = new Set(promote);
-        const merged = [...promote, ...stored.filter(id => !promoted.has(id))]
-            .slice(0, RECENT_APPS_MEMORY);
-        this._settings.setRecentApps(merged);
+        this._recents.syncRunning(this._runningAppIds());
     }
 
     /**
-     * The ids the recents section shows, in the order it shows them —
-     * derived from the persisted queue alone, deliberately NOT from what
-     * happens to be running.
-     *
-     * The limit used to have the number of running unpinned apps
-     * subtracted from it, which made the slice of the queue that reached
-     * the dock a function of the current session: with two unpinned apps
-     * open the section rendered queue[0] plus those two, and after a
-     * reboot the identical queue rendered queue[0..2] instead — same
-     * stored data, different dock. Deriving the window from the queue
-     * alone makes the section reproducible: it comes back showing exactly
-     * what it showed before, in the same order.
-     *
-     * (The budget that motivated the old subtraction is preserved: running
-     * unpinned apps now land *inside* this window, because launching one
-     * promotes it there. Only an app open beyond the budget still hangs
-     * off the end, and dropping its icon while it is open was never an
-     * option.)
-     *
-     * `_forgottenRecentSlots` shrinks the budget: removing a recent icon
-     * should not immediately pull an older one out of history to fill the
-     * gap, only opening another unpinned app should (see
-     * _recordRecentApps() and _forgetRecentApp()).
+     * Pinning an app evicts it from the recents history outright, rather
+     * than leaving an invisible entry that the display filter hides — see
+     * RecentApps.dropPinned() for why that entry was a bug.
      */
-    _recentWindowIds(storedIds, favouriteIds) {
-        const limit = this._settings.dockRecentApps - this._forgottenRecentSlots;
-        if (limit <= 0)
-            return [];
-
-        const ids = [];
-        for (const id of storedIds) {
-            if (ids.length >= limit)
-                break;
-            if (favouriteIds.has(id))
-                continue;
-            // An app can be uninstalled between one login and the next, in
-            // which case lookup_app returns null and the id is simply
-            // skipped — it drops out of the queue on the next write.
-            if (this._appSystem.lookup_app(id))
-                ids.push(id);
-        }
-        return ids;
+    _onFavoritesChanged() {
+        this._recents.dropPinned();
+        this._queueRedisplay();
     }
 
     _redisplayApps() {
@@ -1573,16 +1486,15 @@ export class DockManager {
             .filter(app => !favoriteIds.has(app.get_id()));
         const runningById = new Map(runningApps.map(app => [app.get_id(), app]));
 
-        const storedIds = this._sanitisedRecentIds();
         // What the persisted queue says this section is, independently of
-        // the current session — the whole point of _recentWindowIds().
-        const windowIds = this._recentWindowIds(storedIds, favoriteIds);
+        // the current session — see RecentApps.visibleIds(). A slot in here
+        // belongs to an app whether or not it is running, which is what
+        // holds a reopened app's icon still instead of migrating it.
+        const windowIds = this._recents.visibleIds();
 
-        // Ordered by the persisted recents queue (stable — see
-        // _recordRecentApps()) rather than "every running app, then every
-        // closed one": that split made an app's icon jump position the
-        // instant it launched or quit, even though its place in the queue
-        // never actually moved.
+        // Open apps first, then the recents window: the queue's recent end
+        // is drawn last so the app you just quit sits nearest the folders
+        // and the trash, with the older ones pushed left of it.
         const trailingApps = [];
         const seenTrailingIds = new Set();
         const pushTrailing = (id, app) => {
@@ -1592,19 +1504,22 @@ export class DockManager {
             seenTrailingIds.add(id);
         };
 
+        for (const id of this._recents.openIds())
+            pushTrailing(id, runningById.get(id));
+        // Running apps the queue does not track: a window the shell cannot
+        // match to a .desktop entry has no id worth storing (see
+        // isPersistentAppId) but still needs an icon while it is open. Apps
+        // holding a slot below are skipped rather than picked up here —
+        // reaching them first would put a reopened app back in the open
+        // zone, which is the jump this ordering exists to prevent.
+        const seatedIds = new Set(windowIds);
+        for (const app of runningApps) {
+            if (!seatedIds.has(app.get_id()))
+                pushTrailing(app.get_id(), app);
+        }
+
         for (const id of windowIds)
             pushTrailing(id, runningById.get(id) ?? this._appSystem.lookup_app(id));
-
-        // Open unpinned apps that did not make the window: over budget, or
-        // running since before the queue knew about them. They keep their
-        // place in the queue's order and are appended after it, because an
-        // app that is open has to stay reachable from the dock whatever the
-        // preference says. They are the one part of the row a reboot cannot
-        // reproduce — nothing else here depends on what is running.
-        for (const id of storedIds)
-            pushTrailing(id, runningById.get(id));
-        for (const app of runningApps)
-            pushTrailing(app.get_id(), app);
 
         const wantedIds = new Set([...favoriteIds, ...trailingApps.map(app => app.get_id())]);
         for (const [appId, icon] of this._appIcons) {
@@ -1666,25 +1581,21 @@ export class DockManager {
     }
 
     /**
-     * Drops an app from the recents queue for good. Removing it from the
-     * *stored* list rather than from the visible row is what makes it
-     * stick: the row is rebuilt from that list on every redisplay, so
-     * hiding the icon alone would bring it straight back.
-     *
-     * If the app is running, this is deliberately a no-op on the visible
-     * dock (a running app keeps its icon) — it only means the app will not
-     * linger once it is closed.
-     *
-     * Also claims one slot in `_forgottenRecentSlots` so the vacated spot
-     * stays empty rather than being immediately filled by the next-oldest
-     * app in the stored queue — see _recentWindowIds(). The count is
-     * persisted, so the gap is still there after a restart instead of
-     * quietly refilling itself.
+     * "Remove from Dock" on a recent icon, and the same gesture done by
+     * dragging one off the dock. Offered only on icons that are on the dock
+     * purely because the app was quit recently: an app that is still open
+     * keeps its icon whatever the user drags, so removing it would have to
+     * mean "and do not come back when I quit you", a promise nothing here
+     * remembers. Dropping such an icon is left as a spring-back.
      */
     _forgetRecentApp(appId) {
-        const remaining = this._sanitisedRecentIds().filter(id => id !== appId);
-        this._settings.setRecentApps(remaining);
-        this._setForgottenRecentSlots(this._forgottenRecentSlots + 1);
+        this._recents.forget(appId);
+        this._queueRedisplay();
+    }
+
+    /** "Clear Recent Apps" on the dock's own context menu. */
+    _clearRecentApps() {
+        this._recents.clear();
         this._queueRedisplay();
     }
 
@@ -2142,12 +2053,17 @@ export class DockManager {
         if (appId) {
             if (this._favorites.getFavoriteMap()[appId])
                 this._favorites.removeFavorite(appId);
-            else
+            else if (icon.removeAction)
                 // Not pinned, so there is no favourite to remove — but it
                 // may still be on the dock as a recent app, and dragging an
                 // icon off the Dock is macOS' own gesture for taking it
                 // away. Without this the icon simply sprang back, which is
                 // half of why recents felt impossible to get rid of.
+                //
+                // Gated on the same predicate as the menu item, so an app
+                // that is merely running is not silently taken out of the
+                // recents queue by a gesture that cannot remove its icon
+                // anyway — see _forgetRecentApp().
                 this._forgetRecentApp(appId);
         } else if (icon.config) {
             this._settings.removeStack(icon.config.id);

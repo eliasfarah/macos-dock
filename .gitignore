@@ -1,3 +1,6 @@
 schemas/gschemas.compiled
 locale/*/LC_MESSAGES/*.mo
 *.zip
+
+# msgmerge backups
+*.po~

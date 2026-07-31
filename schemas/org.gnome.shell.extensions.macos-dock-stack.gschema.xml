@@ -135,13 +135,13 @@
       <range min="0" max="6"/>
       <default>3</default>
       <summary>Apps abertos recentemente</summary>
-      <description>Quantos aplicativos não fixados usados recentemente continuam na dock depois de fechados, como no macOS. 0 desativa a seção.</description>
+      <description>Quantos aplicativos não fixados continuam na dock depois de fechados, como no macOS. Conta apenas os já fechados: um aplicativo aberto aparece na dock porque está em execução e não ocupa vaga. 0 desativa a seção.</description>
     </key>
 
     <key name="recent-apps" type="as">
       <default>[]</default>
       <summary>Lista de apps recentes</summary>
-      <description>IDs dos aplicativos usados recentemente, do mais recente ao mais antigo. Somente IDs de arquivos .desktop são guardados: janelas que o Shell não consegue associar a um .desktop recebem um ID sintético ("window:12") cujo número muda a cada sessão, então guardá-lo faria a lista se embaralhar a cada reinício. Mantido pela extensão; não é uma preferência editável.</description>
+      <description>IDs dos aplicativos fechados recentemente, do mais recente ao mais antigo (a dock desenha na ordem inversa, com o mais recente junto à lixeira). Um aplicativo reaberto continua na lista para não perder sua posição na fileira. Somente IDs de arquivos .desktop são guardados: janelas que o Shell não consegue associar a um .desktop recebem um ID sintético ("window:12") cujo número muda a cada sessão, então guardá-lo faria a lista se embaralhar a cada reinício. Mantido pela extensão; não é uma preferência editável.</description>
     </key>
 
     <key name="recent-apps-suppressed" type="i">
@@ -149,6 +149,12 @@
       <default>0</default>
       <summary>Vagas de recentes suprimidas</summary>
       <description>Quantas vagas da seção de recentes foram esvaziadas por "Remover da Dock" e devem continuar vazias até que outro aplicativo seja aberto. Persistido para que a seção volte igual depois de reiniciar. Mantido pela extensão; não é uma preferência editável.</description>
+    </key>
+
+    <key name="recent-apps-format" type="i">
+      <default>0</default>
+      <summary>Versão do formato dos recentes</summary>
+      <description>Marca qual migração do estado de recentes já foi aplicada, para que uma migração pontual não se repita a cada sessão. 0 é o estado gravado antes de a fila de recentes ganhar seu próprio módulo. Mantido pela extensão; não é uma preferência editável.</description>
     </key>
 
     <key name="appearance" type="s">

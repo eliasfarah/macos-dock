@@ -51,6 +51,7 @@ git config user.email eliasfarah@users.noreply.github.com
   - `settings.js` — GSettings wrapper
   - `stack.js` — Stack lifecycle & StackManager (parks stacks for reuse)
   - `dockManager.js` — Main dock bar: layout, magnification, drag-reorder, autohide
+  - `recentApps.js` — Recents queue: MRU state, ordering rules, persistence (no gi imports — see Testing)
   - `dockAppIcon.js` — App icon (extends AppDisplay.AppIcon)
   - `dockFolderIcon.js` — Folder preview (stacked thumbnails) + progress bar
   - `dockTrashIcon.js` — Trash (full/empty state)
@@ -64,6 +65,9 @@ git config user.email eliasfarah@users.noreply.github.com
 - **Spring physics:** Custom-computed mass/stiffness/damping curve (not Clutter's built-in easing) for faithful macOS motion.
 - **Real blur:** `Shell.BlurEffect` for actual background blur (glass panel), not a visual hack.
 - **Visual accuracy:** Every measurement (padding, spacing, corner radius, separator height, indicator size/position, glass palettes) measured from real macOS Tahoe captures.
+- **Recents split from icons:** `RecentApps` (`modules/recentApps.js`) owns the recents queue — insertion, ordering, the pinned-app exclusion, the visible-window limit and GSettings persistence. It imports nothing from `gi`; everything it needs about the world arrives through four injected ports (storage, `isPinned`, `appExists`, `limit`), which is what lets `tests/recentApps.test.js` run it under bare `gjs`. `DockManager` keeps only the icons.
+- **Persisted recents state is versioned.** `recent-apps-format` records which one-time migration has run, so a migration cannot repeat and undo what the user has done since. `RECENTS_FORMAT = 1` dropped suppressed-slot counts written by the old `_forgetRecentApp()`, which charged a slot on every removal — including running apps that kept their icon anyway — and so could inflate past the preference and blank the section outright. Bump `RECENTS_FORMAT` (and document the step in `modules/recentApps.js`) whenever a stored value changes *meaning* rather than merely changing.
+- **Recents are filled by quitting, not by launching.** The trailing row is `[open apps] [recents]`, with the queue's recent end drawn last so the app you just quit sits nearest the trash. An open unpinned app is on the dock because it is running and costs the queue nothing, so the limit (default 3) only ever counts closed apps. Reopening a recent leaves it in the queue holding its slot — it gains a running dot and does not move — and quitting it again refiles it at the recent end. Two consequences worth knowing: the model exposes `openIds()` (open zone, launch order) and `visibleIds()` (queue window, **display order**, oldest first), and focus is not an input at all.
 
 ### Feature Set
 
@@ -145,6 +149,23 @@ Source strings (the `_('...')` msgid literals in `prefs.js` and `modules/*.js`) 
 
 ## Testing Environment
 
+**Unit tests** (no compositor needed — run these first, they are instant):
+
+```sh
+gjs -m tests/recentApps.test.js
+```
+
+Only logic with no `gi` dependency can be tested this way. `modules/recentApps.js`
+is deliberately written to that constraint; anything that touches Clutter/St
+still needs the headless session below.
+
+**Headless limitation:** a `--headless` shell has no seat, so mutter never
+assigns window focus — `Shell.WindowTracker.focus_app` stays `null` there and
+`notify::focus-app` never fires. Recents no longer depend on focus (they are
+driven by `app-state-changed` alone), so the section *can* be exercised
+headless by launching and quitting apps; anything else focus-driven still
+needs the live session.
+
 **Machine:** Arch Linux, GNOME 50, Wayland (primary)
 
 Tools:
@@ -186,6 +207,9 @@ glib-compile-schemas schemas/
 
 # Compile translations (after po/pt_BR.po changes)
 msgfmt po/pt_BR.po -o locale/pt_BR/LC_MESSAGES/macos-dock-stack.mo
+
+# Run the recents-queue unit tests
+gjs -m tests/recentApps.test.js
 
 # Disable extension
 gnome-extensions disable macos-dock-stack@eliasfarah.github.io
