@@ -323,10 +323,12 @@ test('a fourth close drops the oldest slot, not the newest close', () => {
     assertEqual(session.row, [DISCORD, CALC, EDITOR], 'Spotify held the oldest slot');
 });
 
-test('the queue is FIFO by slot age, not by close time', () => {
-    // Spotify is the most recently *used* app here and still goes first:
-    // its slot is the oldest, and a slot is what the limit counts. Keeping
-    // it would mean moving it, which is the one thing the row will not do.
+test('the window is by recency of use, not by slot age', () => {
+    // Discord was closed first here, before Calc and well before Spotify —
+    // so when a fourth app takes the window past its limit, Discord is the
+    // one that should give way, even though its slot sits to Spotify's
+    // right. Positions do not move either way: Spotify, closed most
+    // recently of the three, still draws in the slot it always had.
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
     session.quit(DISCORD, CALC);
@@ -335,7 +337,7 @@ test('the queue is FIFO by slot age, not by close time', () => {
 
     session.open(EDITOR).quit(EDITOR);
 
-    assertEqual(session.row, [DISCORD, CALC, EDITOR]);
+    assertEqual(session.row, [SPOTIFY, CALC, EDITOR], 'Discord was least recently used');
 });
 
 test('reopening a recent does not summon an app that had aged out', () => {
@@ -367,9 +369,14 @@ test('reopening an aged-out app brings back its own icon and no other', () => {
 
     assertEqual(session.row, [SPOTIFY, CALC, EDITOR, FILES]);
 
+    // Closing it again is a fresh use, not a no-op: this is the whole point
+    // of "recent apps" — Spotify was just closed, so it belongs in the
+    // window again, in the slot it always had. Calc, untouched since the
+    // very start of this test, is the one that steps aside for it.
     session.quit(SPOTIFY);
 
-    assertEqual(session.row, [CALC, EDITOR, FILES], 'and it goes back out alone');
+    assertEqual(session.row, [SPOTIFY, EDITOR, FILES],
+        'closing it again makes it the most recently used, wherever its slot is');
 });
 
 test('the deeper memory is bounded too', () => {
