@@ -12,8 +12,9 @@
  *
  * Every expectation here is in *display order*: left to right along the dock,
  * so the last id in an array is the one nearest the trash. The rule almost
- * every test below is really checking is that those indices do not change
- * when an app opens or closes.
+ * every test below is really checking is that an id's index, once assigned,
+ * never changes again — launching or quitting an app that already has a
+ * slot leaves every index exactly where it was.
  */
 
 import {
@@ -183,7 +184,7 @@ test('launching moves nothing that is already on the row', () => {
     session.open(SPOTIFY, DISCORD).quit(SPOTIFY);
     const before = session.row;
 
-    session.open(CALC, EDITOR);
+    session.open(CALC);
 
     assertEqual(session.row.slice(0, before.length), before, 'the old slots are untouched');
 });
@@ -192,25 +193,25 @@ test('launching moves nothing that is already on the row', () => {
 
 print('quitting');
 
-test('quitting an app moves it to the end, becoming the most recent', () => {
+test('quitting an app keeps its slot; it does not jump to the end', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
     assertEqual(session.slotOf(DISCORD), 1);
 
-    assert(session.recents.syncRunning([SPOTIFY, CALC]), 'the row changed');
+    session.recents.syncRunning([SPOTIFY, CALC]);
 
-    assertEqual(session.row, [SPOTIFY, CALC, DISCORD], 'Discord is now the one nearest the trash');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'same slots as before, Discord just lost its dot');
     assertEqual(world.stored, [DISCORD], 'only Discord is remembered; Spotify and Calc are still running');
 });
 
-test('quitting in any order files the row in that same order', () => {
+test('quitting in any order leaves the row in arrival order', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
 
     session.quit(CALC, SPOTIFY, DISCORD);
 
-    assertEqual(session.row, [CALC, SPOTIFY, DISCORD], 'last closed sits nearest the trash');
-    assertEqual(world.stored, [CALC, SPOTIFY, DISCORD], 'stored the way it is drawn');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'arrival order, not close order');
+    assertEqual(world.stored, [SPOTIFY, DISCORD, CALC], 'stored the way it is drawn');
 });
 
 test('an app with more than one window is filed only when the last one goes', () => {
@@ -264,7 +265,7 @@ test('reopening a recent leaves its icon exactly where it was', () => {
     assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'same row, same indices');
 });
 
-test('closing a reopened app files it again, even though reopening did not move it', () => {
+test('closing a reopened app leaves it exactly where reopening left it', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
     session.quit(SPOTIFY, DISCORD, CALC);
@@ -274,8 +275,8 @@ test('closing a reopened app files it again, even though reopening did not move 
 
     session.quit(SPOTIFY);
 
-    assertEqual(session.row, [DISCORD, CALC, SPOTIFY], 'closing it is a fresh use, every time');
-    assertEqual(world.stored, [DISCORD, CALC, SPOTIFY], 'and the reshuffle is persisted');
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'closing it again moves nothing either');
+    assertEqual(world.stored, [SPOTIFY, DISCORD, CALC], 'stored the way it is drawn');
 });
 
 test('a reopened app is no longer removable as a recent', () => {
@@ -298,24 +299,39 @@ test('reopening does not duplicate a slot', () => {
     assertEqual(session.row, [SPOTIFY]);
 });
 
-test('a running app keeps its icon however full the window gets', () => {
-    // Its slot is the oldest on the row, so the limit would drop it if it
-    // were closed — but a running app is never counted and never dropped.
+test('a running app is never dropped, even if it shrinks the budget for others', () => {
+    // Spotify's own slot is the oldest on the row, so the limit would drop
+    // it if it were closed — but a running app is never counted out. It
+    // still occupies one of the row's three slots, though, so Discord (the
+    // oldest of the three closed apps that follow) gives way instead of
+    // all four fitting at once.
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY).quit(SPOTIFY);
     session.open(SPOTIFY);                  // holds the oldest slot, running
 
     session.open(DISCORD, CALC, EDITOR).quit(DISCORD, CALC, EDITOR);
 
-    assertEqual(session.row, [SPOTIFY, DISCORD, CALC, EDITOR],
-        'three recents plus the open one, all in place');
+    assertEqual(session.row, [SPOTIFY, CALC, EDITOR],
+        'Spotify keeps its icon; Discord, the oldest closed slot, steps aside for it');
 });
 
 // -- the limit ------------------------------------------------------------
 
 print('limit');
 
-test('a fourth close drops the oldest slot, not the newest close', () => {
+test('opening a new app while the window is already full evicts right away, not only on its own close', () => {
+    const world = new World();
+    const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC);
+    session.quit(SPOTIFY, DISCORD, CALC);
+    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'three closed, exactly at the limit');
+
+    session.open(EDITOR);
+
+    assertEqual(session.row, [DISCORD, CALC, EDITOR],
+        'Editor is drawn immediately, still running; Spotify steps aside before Editor is ever closed');
+});
+
+test('a fourth close drops the oldest slot, whatever order they were closed in', () => {
     const world = new World();
     const session = new Session(world.started()).open(SPOTIFY, DISCORD, CALC, EDITOR);
     session.quit(SPOTIFY, DISCORD, CALC, EDITOR);
@@ -323,18 +339,18 @@ test('a fourth close drops the oldest slot, not the newest close', () => {
     assertEqual(session.row, [DISCORD, CALC, EDITOR], 'Spotify held the oldest slot');
 });
 
-test('the window remembers close order, not arrival order', () => {
-    // Arrival was Discord, Spotify, Calc, but they were closed in a
-    // different order — the row must follow the close order, and so must
-    // eviction once a fourth app takes the window past its limit.
+test('the window remembers arrival order, not close order', () => {
+    // Arrival was Discord, Spotify, Calc, and they were closed in a
+    // different order — the row (and eviction, once a fourth app takes the
+    // window past its limit) follows arrival order regardless.
     const world = new World();
     const session = new Session(world.started()).open(DISCORD, SPOTIFY, CALC);
     session.quit(SPOTIFY, DISCORD, CALC);
-    assertEqual(session.row, [SPOTIFY, DISCORD, CALC], 'three closed, all fit, in close order');
+    assertEqual(session.row, [DISCORD, SPOTIFY, CALC], 'three closed, all fit, in arrival order');
 
     session.open(EDITOR).quit(EDITOR);
 
-    assertEqual(session.row, [DISCORD, CALC, EDITOR], 'Spotify was the least recently closed');
+    assertEqual(session.row, [SPOTIFY, CALC, EDITOR], 'Discord held the oldest slot');
 });
 
 test('reopening a recent does not summon an app that had aged out', () => {
@@ -354,22 +370,26 @@ test('reopening a recent does not summon an app that had aged out', () => {
     assertEqual(session.row, [CALC, EDITOR, FILES], 'same row, Files now running');
 });
 
-test('reopening an aged-out app promotes it immediately, closing again leaves it there', () => {
+test('reopening an aged-out app forgets its old slot and starts fresh at the end', () => {
     const world = new World();
     const session = new Session(world.started())
         .open(SPOTIFY, DISCORD, CALC, EDITOR, FILES)
         .quit(SPOTIFY, DISCORD, CALC, EDITOR, FILES);
     assertEqual(session.row, [CALC, EDITOR, FILES], 'the two oldest slots aged out');
 
-    // Spotify is not currently shown at all, so opening it again is a fresh
-    // use: it jumps straight to the end, nearest the trash — this is the
-    // whole point of "recent apps". Calc, the least recently used of the
-    // three currently in view, is the one that steps aside for it.
+    // Spotify is not currently shown at all — its old slot (the very
+    // oldest on the row) is stale history, not a reserved seat. Reopening
+    // it is a fresh arrival: it jumps to the end, nearest the trash, same
+    // as a brand-new app would. It also still occupies one of the three
+    // slots, so Calc — the oldest of the three currently shown — steps
+    // aside; Discord was already aged out and stays that way.
     session.open(SPOTIFY);
 
-    assertEqual(session.row, [EDITOR, FILES, SPOTIFY], 'Calc steps aside for it');
+    assertEqual(session.row, [EDITOR, FILES, SPOTIFY],
+        'seated fresh at the end, not resurrected at its old slot; Calc gives way');
 
-    // It is already at the end, so closing it again changes nothing further.
+    // It is already at the end, and closing it never relocates anything,
+    // so nothing further changes.
     session.quit(SPOTIFY);
 
     assertEqual(session.row, [EDITOR, FILES, SPOTIFY], 'already the most recent; nothing left to do');
@@ -603,8 +623,12 @@ test('apps already running at enable time are not read as launches or quits', ()
 
     assert(!recents.syncRunning([CALC, EDITOR]), 'nothing filed');
     assertEqual(recents.ids, [SPOTIFY, DISCORD], 'restored order untouched');
-    assertEqual(recents.visibleIds(), [SPOTIFY, DISCORD, CALC, EDITOR],
-        'recents first, then what is up, left to right');
+    // Two running apps already spend two of the three slots, so only the
+    // newer of the two restored closed apps still fits — Spotify's slot
+    // aged out the moment there was no room left for it, same as it would
+    // at any other point in the session.
+    assertEqual(recents.visibleIds(), [DISCORD, CALC, EDITOR],
+        'closed apps yield to running ones when the row is over budget');
 });
 
 test('an app running at enable time keeps the slot it was restored with', () => {
