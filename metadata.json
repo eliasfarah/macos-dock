@@ -6,7 +6,7 @@
     "50"
   ],
   "url": "https://github.com/eliasfarah/macos-dock",
-  "version-name": "1.4.3",
+  "version-name": "1.4.4",
   "settings-schema": "org.gnome.shell.extensions.macos-dock-stack",
   "gettext-domain": "macos-dock-stack"
 }

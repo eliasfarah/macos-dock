@@ -7,7 +7,7 @@ Atualizado em 4 de agosto de 2026.
 - Repositório: `git@github.com:eliasfarah/macos-dock.git`
 - Branch principal: `main`
 - Extensão: `macos-dock-stack@eliasfarah.github.io`
-- Versão atual: `1.4.3`
+- Versão atual: `1.4.4`
 - Ambiente principal: GNOME Shell 50.3 em Wayland
 - O diretório instalado da extensão é um link para este repositório.
 - Em Wayland, mudanças nos módulos JavaScript só são carregadas com logout/login completo.
