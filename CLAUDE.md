@@ -153,6 +153,7 @@ Source strings (the `_('...')` msgid literals in `prefs.js` and `modules/*.js`) 
 **Unit tests** (no compositor needed — run these first, they are instant):
 
 ```sh
+gjs -m tests/dockGeometry.test.js
 gjs -m tests/recentApps.test.js
 ```
 
@@ -209,7 +210,8 @@ glib-compile-schemas schemas/
 # Compile translations (after po/pt_BR.po changes)
 msgfmt po/pt_BR.po -o locale/pt_BR/LC_MESSAGES/macos-dock-stack.mo
 
-# Run the recents-queue unit tests
+# Run the unit tests
+gjs -m tests/dockGeometry.test.js
 gjs -m tests/recentApps.test.js
 
 # Disable extension

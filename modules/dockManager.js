@@ -28,6 +28,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import { createGlassPanel, applyPanelRadius } from './glass.js';
+import { dockGeometryStatus, dockTargetY } from './dockGeometry.js';
 import { LauncherEntryWatcher } from './launcherEntry.js';
 import { AppearanceManager, applyAppearanceClass, blurBrightnessFor } from './appearance.js';
 import { clamp, getActorGeometry } from './utils.js';
@@ -91,6 +92,12 @@ const MAGNIFY_IDLE_FRAMES = 30;
 // Shortest gap between two geometry repairs, in microseconds — see
 // _verifyDockGeometry().
 const GEOMETRY_FIX_COOLDOWN = 250000;
+// Allocation notifications are useful but not sufficient: a transform on
+// an ancestor changes where the dock is painted without changing the dock's
+// own allocation, and a notification emitted during _layoutDock() is ignored
+// by its re-entrancy guard. This cheap watchdog verifies the visible result.
+const GEOMETRY_WATCHDOG_INTERVAL_SECONDS = 1;
+const LAYOUT_RETRY_DELAY = 100;
 // The floor the auto-shrink will not go below (see _effectiveIconSize).
 // Past this the icons stop being recognisable and a dock that has become
 // illegible is worse than one that is merely full.
@@ -169,6 +176,7 @@ export class DockManager {
         // Pending re-layout queued by _verifyDockGeometry(); also its
         // "a repair is already on the way" flag.
         this._geometryFixId = 0;
+        this._geometryWatchdogId = 0;
         this._lastGeometryFix = 0;
 
         // Whether the strut may reserve space yet — false while the login
@@ -189,6 +197,7 @@ export class DockManager {
         this._iconSizeCache = 0;
         this._appliedIconSize = 0;
         this._layingOut = false;
+        this._layoutRetryId = 0;
         this._launcherEntries = null;
         this._dragMonitor = null;
     }
@@ -781,6 +790,16 @@ export class DockManager {
             this._geometryFixId = 0;
         }
 
+        if (this._geometryWatchdogId) {
+            GLib.Source.remove(this._geometryWatchdogId);
+            this._geometryWatchdogId = 0;
+        }
+
+        if (this._layoutRetryId) {
+            GLib.Source.remove(this._layoutRetryId);
+            this._layoutRetryId = 0;
+        }
+
         this._cancelScheduledHide();
         this._destroyAutohideStrip();
 
@@ -985,8 +1004,17 @@ export class DockManager {
         // the display tears its struts down — without this, every such
         // emission walked disposed actors ("has been already disposed"
         // spam on every logout).
-        if (!this._dockActor || this._layingOut || this._chromeGone)
+        if (!this._dockActor || this._chromeGone || this._tearingDown)
             return;
+
+        // Signals from the invisible strut can arrive synchronously while
+        // this method is still changing it. Dropping those calls outright
+        // also dropped the one useful call when monitor/work-area state
+        // changed during the pass, leaving the dock at the stale position.
+        if (this._layingOut) {
+            this._queueLayoutRetry();
+            return;
+        }
 
         // Re-entrancy guard. _layoutDock() resizes the strut actor, which
         // makes ui/layout.js recompute struts, which emits
@@ -1001,12 +1029,34 @@ export class DockManager {
         }
     }
 
+    _queueLayoutRetry() {
+        if (this._layoutRetryId || this._chromeGone || this._tearingDown)
+            return;
+        this._layoutRetryId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, LAYOUT_RETRY_DELAY, () => {
+                this._layoutRetryId = 0;
+                this._layoutDock();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
     _layoutDockInner() {
+        const monitorIndex = Main.layoutManager.primaryIndex;
+        const monitor = Main.layoutManager.monitors[monitorIndex];
+
+        // A monitor-less fallback is not a harmless approximation. During a
+        // mode switch/login it can describe the old work area; placing the
+        // dock from it is how a transient state became a persistent dock
+        // flush against the edge. Leave the last good geometry untouched and
+        // let monitors-changed/the watchdog retry once the primary exists.
+        if (monitorIndex < 0 || !monitor) {
+            this._queueLayoutRetry();
+            return;
+        }
+
         const metrics = this._dockMetrics();
         this._applyDockMetrics(metrics);
 
-        const monitorIndex = Main.layoutManager.primaryIndex;
-        const monitor = Main.layoutManager.monitors[monitorIndex];
         const workArea = Main.layoutManager.getWorkAreaForMonitor(monitorIndex);
         const margin = this._settings.dockEdgeMargin;
 
@@ -1038,8 +1088,7 @@ export class DockManager {
         // exercised a single already-settled virtual monitor). The
         // monitor rect itself never depends on our strut, so anchoring
         // to it directly breaks the loop entirely.
-        const bottom = monitor ? monitor.y + monitor.height : workArea.y + workArea.height;
-        const y = this._dockTargetY(bottom, height, margin);
+        const y = dockTargetY(monitor, height, margin);
 
         // Remembered as the "unmagnified" geometry so hover
         // magnification can widen the bar around it and return to it
@@ -1051,6 +1100,15 @@ export class DockManager {
 
         this._dockActor.set_position(Math.round(x), Math.round(y));
         this._dockActor.set_size(Math.round(width), Math.round(height));
+
+        // With autohide disabled there is no legitimate vertical transform
+        // on the bar. Reset it on every real layout as well as in the
+        // watchdog repair, so a cancelled old autohide spring cannot keep
+        // the dock six pixels lower while its base allocation looks right.
+        if (!this._settings.dockAutohide) {
+            cancelSpring(this._dockActor, 'autohide');
+            this._dockActor.translation_y = 0;
+        }
 
         // The strut actor spans the monitor's *full* width and reaches
         // its literal bottom edge (not the work area's — struts are
@@ -1077,16 +1135,6 @@ export class DockManager {
     }
 
     /**
-     * The bar's resting top edge. One line, but deliberately its own
-     * method: _verifyDockGeometry() has to be able to ask "where should the
-     * bar be right now?" without re-running a whole layout pass, and the
-     * two answers must not be able to drift apart.
-     */
-    _dockTargetY(bottom, height, margin) {
-        return bottom - height - margin;
-    }
-
-    /**
      * Watches for the bar being moved by anything that is not this class —
      * a fullscreen app's mode switch, a monitor hotplug settling, a
      * cancelled autohide spring — none of which a fixed virtual-monitor
@@ -1109,11 +1157,27 @@ export class DockManager {
         // allocation at all, so it needs its own notification.
         this._dockActor.connect('notify::allocation', () => this._verifyDockGeometry());
         this._dockActor.connect('notify::translation-y', () => this._verifyDockGeometry());
+
+        // Event-driven checks miss ancestor transforms and can be swallowed
+        // while a layout is in progress. Poll the invariant too; once per
+        // second is imperceptible overhead and bounds a persistent visual
+        // failure to at most one second.
+        // timeout_add_seconds() deliberately coalesces low-frequency timers,
+        // avoiding a dedicated millisecond-precision wake-up for this check.
+        this._geometryWatchdogId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT_IDLE, GEOMETRY_WATCHDOG_INTERVAL_SECONDS, () => {
+                if (!this._dockActor || this._chromeGone || this._tearingDown) {
+                    this._geometryWatchdogId = 0;
+                    return GLib.SOURCE_REMOVE;
+                }
+                this._verifyDockGeometry();
+                return GLib.SOURCE_CONTINUE;
+            });
     }
 
     _verifyDockGeometry() {
         if (!this._dockActor || this._chromeGone || this._tearingDown ||
-            this._layingOut || this._geometryFixId || this._dockHidden)
+            this._layingOut || this._geometryFixId)
             return;
 
         const monitor = Main.layoutManager.monitors[Main.layoutManager.primaryIndex];
@@ -1122,20 +1186,36 @@ export class DockManager {
 
         const margin = this._settings.dockEdgeMargin;
         const height = Math.round(this._dockMetrics().height);
-        const wantY = Math.round(this._dockTargetY(monitor.y + monitor.height, height, margin));
+        const wantY = Math.round(dockTargetY(monitor, height, margin));
 
-        // While autohide is on, translation_y belongs to the reveal/hide
-        // spring and is non-zero for the whole of a 260ms animation, so
-        // folding it in here would make this fight that animation. With
-        // autohide off nothing else may touch it, so a non-zero value is
-        // itself a fault worth repairing — a spring cancelled mid-flight
-        // would strand the bar low in exactly this way.
-        const translation = this._settings.dockAutohide ? 0 : this._dockActor.translation_y;
+        // Never fight the intentional slide. The watchdog verifies the
+        // final state, so a cancelled or incomplete spring cannot remain
+        // stranded afterwards.
+        if (this._dockActor._springTimelines?.has('autohide'))
+            return;
+
         const box = this._dockActor.get_allocation_box();
-        const haveY = Math.round(box.y1 + translation);
+        const haveBaseY = Math.round(box.y1);
         const haveHeight = Math.round(box.y2 - box.y1);
+        const [paintedX, paintedY] = this._dockActor.get_transformed_position();
+        const [paintedWidth, paintedHeight] = this._dockActor.get_transformed_size();
 
-        if (haveY === wantY && haveHeight === height)
+        const base = dockGeometryStatus(
+            monitor, height, margin, haveBaseY, haveHeight);
+        const painted = dockGeometryStatus(
+            monitor, height, margin, paintedY, paintedHeight);
+        const shouldBeHidden = this._settings.dockAutohide && this._dockHidden;
+        const expectedTranslation = shouldBeHidden
+            ? height + margin + AUTOHIDE_TRIGGER_HEIGHT
+            : 0;
+        const translationWrong =
+            Math.abs(this._dockActor.translation_y - expectedTranslation) > 0.5;
+
+        // The painted check is the user's actual invariant: when visible,
+        // the bottom gap on screen must equal dock-edge-margin. A hidden
+        // dock is intentionally translated off-screen, but its base
+        // allocation must still be correct so it reveals to the right spot.
+        if (!base.drifted && (shouldBeHidden || !painted.drifted) && !translationWrong)
             return;
 
         // A repair does not land in the allocation the notification that
@@ -1150,7 +1230,8 @@ export class DockManager {
         if (now - this._lastGeometryFix < GEOMETRY_FIX_COOLDOWN)
             return;
 
-        const detail = `y=${haveY} (expected ${wantY}), height=${haveHeight} (expected ${height}), ` +
+        const detail = `base_y=${haveBaseY} (expected ${wantY}), painted=${Math.round(paintedX)},${Math.round(paintedY)} ` +
+            `${Math.round(paintedWidth)}x${Math.round(paintedHeight)}, gap=${Math.round(painted.actualGap)} (expected ${margin}), ` +
             `translation_y=${this._dockActor.translation_y}, margin=${margin}, ` +
             `monitor=${monitor.x},${monitor.y} ${monitor.width}x${monitor.height}, ` +
             `overview=${Main.overview.visible}, autohide=${this._settings.dockAutohide}`;
@@ -1165,9 +1246,17 @@ export class DockManager {
                 return GLib.SOURCE_REMOVE;
             this._lastGeometryFix = GLib.get_monotonic_time();
             console.warn(`macos-dock-stack: dock geometry drifted, repositioned — ${detail}`);
-            if (!this._settings.dockAutohide)
-                this._dockActor.translation_y = 0;
+            cancelSpring(this._dockActor, 'autohide');
+            this._dockActor.translation_y = 0;
             this._layoutDock();
+
+            // Preserve intentional hidden state after repairing its base
+            // allocation. A visible dock always stays at translation 0.
+            if (this._settings.dockAutohide && this._dockHidden) {
+                this._dockActor.translation_y =
+                    this._dockActor.height + this._settings.dockEdgeMargin +
+                    AUTOHIDE_TRIGGER_HEIGHT;
+            }
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -1178,16 +1267,12 @@ export class DockManager {
      *
      * `_layoutDock()` is already immune to the strut feedback loop (it
      * anchors to the monitor rect, never to the work area), but it can
-     * still run *before* the monitor list is meaningful — at enable() time
-     * during login, ui/layout.js may not have finished its own monitor
-     * setup, and `Main.layoutManager.monitors[primaryIndex]` is then
-     * undefined. The dock lands using the work-area fallback, and because
-     * nothing afterwards asked it to try again, that one bad position
-     * simply persisted for the rest of the session: the bar sat flush
-     * against the screen edge with no margin until some unrelated
-     * preference change happened to re-trigger a layout, at which point it
-     * silently corrected itself — a dock that appears to reposition itself
-     * on its own, when really it was just stuck wrong from login.
+     * still be requested *before* the monitor list is meaningful — at
+     * enable() time during login or briefly during a mode switch. Such a
+     * request is deferred by _layoutDockInner() rather than placing the dock
+     * from a stale work-area fallback, which is what used to leave the bar
+     * flush against the edge until an unrelated preference change happened
+     * to trigger another layout.
      *
      * Two cheap subscriptions close it: 'workareas-changed' fires whenever
      * any strut on the display changes (including other panels' and our
@@ -1200,8 +1285,8 @@ export class DockManager {
      * never from the work area, so the second pass computes the identical
      * position and size, writes the same values, produces no allocation
      * change and therefore no further 'workareas-changed'. It settles after
-     * one extra pass. (A re-entrancy guard in _layoutDock() covers the
-     * synchronous case separately.)
+     * one extra pass. A synchronous call is coalesced into a short delayed
+     * retry instead of being discarded.
      */
     _connectLayoutStability() {
         this._objectSignals.push(
