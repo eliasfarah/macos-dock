@@ -753,7 +753,7 @@ export class Stack {
         button._entryUri = entry.uri;
 
         const box = new St.BoxLayout({
-            vertical: false,
+            orientation: Clutter.Orientation.HORIZONTAL,
             style_class: 'macos-stack-row-box',
             y_align: Clutter.ActorAlign.CENTER,
             x_expand: true, y_expand: true,
@@ -800,7 +800,7 @@ export class Stack {
         button._entryUri = entry.uri;
 
         const box = new St.BoxLayout({
-            vertical: false,
+            orientation: Clutter.Orientation.HORIZONTAL,
             style_class: 'macos-stack-fan-box',
             x_align: Clutter.ActorAlign.END,
             y_align: Clutter.ActorAlign.CENTER,
@@ -862,7 +862,7 @@ export class Stack {
         });
 
         const box = new St.BoxLayout({
-            vertical: false,
+            orientation: Clutter.Orientation.HORIZONTAL,
             style_class: 'macos-stack-fan-box',
             x_align: Clutter.ActorAlign.END,
             y_align: Clutter.ActorAlign.CENTER,
@@ -925,7 +925,7 @@ export class Stack {
         button._entryUri = entry.uri;
 
         const box = new St.BoxLayout({
-            vertical: true,
+            orientation: Clutter.Orientation.VERTICAL,
             style_class: 'macos-stack-item-box',
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,

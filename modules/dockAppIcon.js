@@ -172,6 +172,7 @@ class DockAppIcon extends AppDisplay.AppIcon {
     }
 
     _onStateChanged() {
+        this.syncRunningIndicator();
         if (this.app.state === Shell.AppState.STARTING)
             this._startLaunchBounce();
         else
@@ -245,6 +246,24 @@ class DockAppIcon extends AppDisplay.AppIcon {
      */
     setDotStyle(style) {
         this._dot?.set_style(style);
+    }
+
+    /**
+     * Keep the indicator in sync with both Shell.App's state and its
+     * windows. A few apps can briefly retain windows while their app state
+     * notification is stale (notably around launch/restore); AppIcon's
+     * default indicator only checks the state enum, so those windows were
+     * visible in the dock without a dot. The manager calls this on each
+     * app-state redisplay, while the state listener below keeps transitions
+     * immediate.
+     */
+    syncRunningIndicator() {
+        const hasWindows = this.app.get_windows().length > 0;
+        const running = this.app.state !== Shell.AppState.STOPPED || hasWindows;
+        if (running)
+            this._dot?.show();
+        else
+            this._dot?.hide();
     }
 
     // Overview-entry visual effects used during app-grid DND — meaningless

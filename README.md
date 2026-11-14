@@ -1,6 +1,6 @@
 # macOS Dock Stack
 
-Uma dock ao estilo **macOS** para o GNOME Shell 50, construída do zero — não
+Uma dock ao estilo **macOS** para o GNOME Shell 50 e 51, construída do zero — não
 um tema por cima da Dash do GNOME. Barra de vidro persistente com
 magnificação no cursor, indicador de app aberto, arrastar para reordenar,
 efeito *genie* ao minimizar, e **Stacks de pasta** do Finder nas três
@@ -12,7 +12,7 @@ medida em capturas reais do Dock do macOS Tahoe, não estimada.
 
 ## Requisitos
 
-- GNOME Shell **50** (`gnome-shell --version`)
+- GNOME Shell **50 ou 51** (`gnome-shell --version`)
 - Sessão Wayland ou X11
 
 ## Instalação

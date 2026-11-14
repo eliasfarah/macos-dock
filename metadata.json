@@ -3,10 +3,11 @@
   "name": "macOS Dock Stack",
   "description": "Persistent macOS-style dock, built from scratch: pinned/running apps, magnification, indicators, genie minimize effect, and folder stacks (Finder Stack) — a folder icon expands, from the icon itself, into a glass panel with spring physics, background blur, and staggered item reveal.",
   "shell-version": [
-    "50"
+    "50",
+    "51"
   ],
   "url": "https://github.com/eliasfarah/macos-dock",
-  "version-name": "1.4.4",
+  "version-name": "1.4.5",
   "settings-schema": "org.gnome.shell.extensions.macos-dock-stack",
   "gettext-domain": "macos-dock-stack"
 }

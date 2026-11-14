@@ -312,7 +312,7 @@ export class DockManager {
         // marks off running-but-unpinned apps, which macOS does draw when
         // "show recent applications" is on.
         this._iconBox = new St.BoxLayout({
-            vertical: false,
+            orientation: Clutter.Orientation.HORIZONTAL,
             reactive: true, // needed to receive motion-event for magnification
             style_class: 'macos-dock-icon-box',
             x_expand: true, y_expand: true,
@@ -323,8 +323,8 @@ export class DockManager {
 
         this._showAppsIcon = this._watchIconLifetime(new DockShowAppsIcon(this._settings.dockIconSize));
         this._showAppsIcon.set_pivot_point(0.5, 1); // grow upward from the dock's baseline
-        this._appsBox = new St.BoxLayout({ vertical: false });
-        this._stacksBox = new St.BoxLayout({ vertical: false });
+        this._appsBox = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL });
+        this._stacksBox = new St.BoxLayout({ orientation: Clutter.Orientation.HORIZONTAL });
         // Divides pinned apps from merely-running ones; lives inside
         // appsBox and is repositioned/hidden by _redisplayApps.
         this._sepRunning = createDockSeparator();
@@ -1658,6 +1658,7 @@ export class DockManager {
             icon.removeAction = recentIds.has(appId)
                 ? () => this._forgetRecentApp(appId)
                 : null;
+            icon.syncRunningIndicator();
             icon.setProgress(this._launcherEntries?.entries.get(appId)?.progress ?? -1);
         }
     }
