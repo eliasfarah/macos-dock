@@ -249,17 +249,19 @@ class DockAppIcon extends AppDisplay.AppIcon {
     }
 
     /**
-     * Keep the indicator in sync with both Shell.App's state and its
-     * windows. A few apps can briefly retain windows while their app state
-     * notification is stale (notably around launch/restore); AppIcon's
-     * default indicator only checks the state enum, so those windows were
-     * visible in the dock without a dot. The manager calls this on each
-     * app-state redisplay, while the state listener below keeps transitions
-     * immediate.
+     * Keep the indicator in sync with Shell.App's state and its windows.
+     * Window-backed apps have no desktop entry, so GNOME creates them as a
+     * temporary Shell.App for the open window. Their state can be STOPPED
+     * when the window is not considered an "interesting" app window, even
+     * though the dock is showing that still-open window. Such an icon only
+     * exists while its window exists, so it is always a running icon here.
+     * The manager calls this on every redisplay, while the state listener
+     * below keeps normal app transitions immediate.
      */
     syncRunningIndicator() {
-        const hasWindows = this.app.get_windows().length > 0;
-        const running = this.app.state !== Shell.AppState.STOPPED || hasWindows;
+        const running = this.app.is_window_backed() ||
+            this.app.state !== Shell.AppState.STOPPED ||
+            this.app.get_windows().length > 0;
         if (running)
             this._dot?.show();
         else
