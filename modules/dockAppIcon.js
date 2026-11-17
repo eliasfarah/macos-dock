@@ -12,6 +12,7 @@ import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import Shell from 'gi://Shell';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
 import * as DND from 'resource:///org/gnome/shell/ui/dnd.js';
 import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -69,6 +70,24 @@ class DockAppIcon extends AppDisplay.AppIcon {
         // show/hide the running dot — this is an additional, independent
         // listener for the same signal, just for the launch bounce.
         this.app.connectObject('notify::state', () => this._onStateChanged(), this);
+    }
+
+    activate(...args) {
+        // Apps without a desktop file are represented by a temporary,
+        // window-backed Shell.App. Its launch action has nothing to launch;
+        // bring its existing window forward instead. Keep the normal Shell
+        // path for installed apps, including their launch behavior.
+        if (this.app.is_window_backed()) {
+            const windows = this.app.get_windows();
+            if (windows.length > 0) {
+                const mostRecent = windows.reduce((latest, window) =>
+                    window.get_user_time() > latest.get_user_time() ? window : latest);
+                Main.activateWindow(mostRecent);
+                return;
+            }
+        }
+
+        super.activate(...args);
     }
 
     /**
