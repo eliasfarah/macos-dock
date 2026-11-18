@@ -1615,6 +1615,13 @@ export class DockManager {
         const iconFor = app => {
             const appId = app.get_id();
             let icon = this._appIcons.get(appId);
+            // A temporary Shell.App can be replaced while retaining its ID.
+            // An icon bound to the old object would activate a vanished window.
+            if (icon && icon.app !== app) {
+                icon.destroy();
+                this._appIcons.delete(appId);
+                icon = null;
+            }
             if (!icon) {
                 icon = this._watchIconLifetime(new DockAppIcon(app));
                 icon.icon.setIconSize(iconSize);
